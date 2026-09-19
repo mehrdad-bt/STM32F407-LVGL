@@ -21,6 +21,7 @@
 
 #include "lvgl.h"
 #include "LCDController.h"
+#include "ui/ui.h"
 
 /* USER CODE END Includes */
 
@@ -32,8 +33,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define LCD_WIDTH       320U
-#define LCD_HEIGHT      240U
+#define LVGL_TASK_PERIOD_MS    5U
 
 /* USER CODE END PD */
 
@@ -72,15 +72,6 @@ static void MX_SPI1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* Nothing here for LVGL tick.
- *
- * LVGL 8.x receives its 1 ms tick from:
- *
- * SysTick_Handler()
- *
- * in stm32f4xx_it.c
- */
-
 /* USER CODE END 0 */
 
 /**
@@ -95,6 +86,11 @@ int main(void)
 
     /* MCU Configuration--------------------------------------------------------*/
 
+    /*
+     * Reset peripherals
+     * Initialize Flash interface
+     * Initialize SysTick
+     */
     HAL_Init();
 
     /* USER CODE BEGIN Init */
@@ -102,7 +98,7 @@ int main(void)
     /* USER CODE END Init */
 
     /*
-     * System Clock
+     * Configure system clock
      */
     SystemClock_Config();
 
@@ -118,210 +114,66 @@ int main(void)
     /*
      * Initialize SPI1
      *
-     * DMA2 Stream3 is initialized by:
+     * HAL_SPI_Init() automatically calls:
      *
      * HAL_SPI_MspInit()
+     *
+     * which configures:
+     *
+     * PA5 = SCK
+     * PA6 = MISO
+     * PA7 = MOSI
+     *
+     * and:
+     *
+     * DMA2 Stream3 Channel3
      */
     MX_SPI1_Init();
 
     /* USER CODE BEGIN 2 */
 
-    /* ---------------------------------------------------------------------- */
-    /* LVGL initialization                                                    */
-    /* ---------------------------------------------------------------------- */
-
+    /*
+     * ----------------------------------------------------------------------
+     * LVGL initialization
+     * ----------------------------------------------------------------------
+     */
     lv_init();
 
-    /* ---------------------------------------------------------------------- */
-    /* LCD + LVGL display driver                                              */
-    /* ---------------------------------------------------------------------- */
-
+    /*
+     * ----------------------------------------------------------------------
+     * ILI9341 + LVGL display driver
+     * ----------------------------------------------------------------------
+     *
+     * ILI9341:
+     *
+     * CS    = PB0
+     * DC    = PC5
+     * RESET = PB1
+     *
+     * SPI1:
+     *
+     * SCK   = PA5
+     * MISO  = PA6
+     * MOSI  = PA7
+     */
     lv_port_disp_init();
 
     /*
-     * At this point:
+     * ----------------------------------------------------------------------
+     * EEZ generated UI
+     * ----------------------------------------------------------------------
      *
-     * SPI1
-     * DMA
-     * ILI9341
-     * LVGL display driver
+     * create_screens()
+     * loadScreen(SCREEN_ID_MAIN)
      *
-     * are initialized.
+     * are called internally by ui_init().
      */
-
-    /* ---------------------------------------------------------------------- */
-    /* Test screen                                                             */
-    /* ---------------------------------------------------------------------- */
-
-    lv_obj_t *screen = lv_scr_act();
+    ui_init();
 
     /*
      * ----------------------------------------------------------------------
-     * Background
+     * Initial LVGL rendering
      * ----------------------------------------------------------------------
-     */
-
-    lv_obj_set_style_bg_color(
-        screen,
-        lv_color_hex(0x000000),
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_bg_opa(
-        screen,
-        LV_OPA_COVER,
-        LV_PART_MAIN
-    );
-
-    /*
-     * ----------------------------------------------------------------------
-     * RED BOX
-     * ----------------------------------------------------------------------
-     */
-
-    lv_obj_t *red_box =
-        lv_obj_create(screen);
-
-    lv_obj_set_size(
-        red_box,
-        220,
-        50
-    );
-
-    lv_obj_align(
-        red_box,
-        LV_ALIGN_TOP_MID,
-        0,
-        15
-    );
-
-    lv_obj_set_style_bg_color(
-        red_box,
-        lv_color_hex(0xFF0000),
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_bg_opa(
-        red_box,
-        LV_OPA_COVER,
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_border_width(
-        red_box,
-        0,
-        LV_PART_MAIN
-    );
-
-    /*
-     * ----------------------------------------------------------------------
-     * GREEN BOX
-     * ----------------------------------------------------------------------
-     */
-
-    lv_obj_t *green_box =
-        lv_obj_create(screen);
-
-    lv_obj_set_size(
-        green_box,
-        220,
-        50
-    );
-
-    lv_obj_align(
-        green_box,
-        LV_ALIGN_CENTER,
-        0,
-        0
-    );
-
-    lv_obj_set_style_bg_color(
-        green_box,
-        lv_color_hex(0x00FF00),
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_bg_opa(
-        green_box,
-        LV_OPA_COVER,
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_border_width(
-        green_box,
-        0,
-        LV_PART_MAIN
-    );
-
-    /*
-     * ----------------------------------------------------------------------
-     * BLUE BOX
-     * ----------------------------------------------------------------------
-     */
-
-    lv_obj_t *blue_box =
-        lv_obj_create(screen);
-
-    lv_obj_set_size(
-        blue_box,
-        220,
-        50
-    );
-
-    lv_obj_align(
-        blue_box,
-        LV_ALIGN_BOTTOM_MID,
-        0,
-        -15
-    );
-
-    lv_obj_set_style_bg_color(
-        blue_box,
-        lv_color_hex(0x0000FF),
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_bg_opa(
-        blue_box,
-        LV_OPA_COVER,
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_border_width(
-        blue_box,
-        0,
-        LV_PART_MAIN
-    );
-
-    /*
-     * ----------------------------------------------------------------------
-     * WHITE LABEL
-     * ----------------------------------------------------------------------
-     */
-
-    lv_obj_t *label =
-        lv_label_create(screen);
-
-    lv_label_set_text(
-        label,
-        "LVGL + DMA"
-    );
-
-    lv_obj_set_style_text_color(
-        label,
-        lv_color_hex(0xFFFFFF),
-        LV_PART_MAIN
-    );
-
-    lv_obj_align(
-        label,
-        LV_ALIGN_CENTER,
-        0,
-        0
-    );
-
-    /*
-     * Force immediate rendering.
      */
     lv_refr_now(NULL);
 
@@ -333,17 +185,41 @@ int main(void)
     while (1)
     {
         /*
-         * LVGL timer handler.
+         * ------------------------------------------------------------------
+         * EEZ Studio tick
+         * ------------------------------------------------------------------
          *
-         * When LVGL needs to redraw the screen,
-         * LCDController.c starts SPI DMA.
+         * Updates the current EEZ screen.
+         */
+        ui_tick();
+
+        /*
+         * ------------------------------------------------------------------
+         * LVGL
+         * ------------------------------------------------------------------
+         *
+         * Handles:
+         *
+         * - timers
+         * - animations
+         * - invalidated objects
+         * - rendering
+         * - display flush
+         *
+         * LCD flush uses SPI1 DMA.
          */
         lv_timer_handler();
 
         /*
          * Small delay.
+         *
+         * SysTick continues running during this delay and
+         * stm32f4xx_it.c updates:
+         *
+         * HAL_GetTick()
+         * LVGL tick
          */
-        HAL_Delay(5);
+        HAL_Delay(LVGL_TASK_PERIOD_MS);
     }
 
     /* USER CODE END WHILE */
@@ -368,7 +244,6 @@ void SystemClock_Config(void)
      * Power
      * ----------------------------------------------------------------------
      */
-
     __HAL_RCC_PWR_CLK_ENABLE();
 
     __HAL_PWR_VOLTAGESCALING_CONFIG(
@@ -379,12 +254,12 @@ void SystemClock_Config(void)
      * ----------------------------------------------------------------------
      * HSI + PLL
      *
-     * HSI    = 16 MHz
+     * HSI  = 16 MHz
      *
-     * PLLM   = 8
-     * PLLN   = 168
-     * PLLP   = 2
-     * PLLQ   = 4
+     * PLLM = 8
+     * PLLN = 168
+     * PLLP = 2
+     * PLLQ = 4
      *
      * SYSCLK = 168 MHz
      * ----------------------------------------------------------------------
@@ -428,7 +303,7 @@ void SystemClock_Config(void)
 
     /*
      * ----------------------------------------------------------------------
-     * Clocks
+     * CPU / AHB / APB
      *
      * SYSCLK = 168 MHz
      * HCLK   = 168 MHz
@@ -497,7 +372,7 @@ static void MX_SPI1_Init(void)
         SPI_DATASIZE_8BIT;
 
     /*
-     * SPI mode 0
+     * SPI Mode 0
      *
      * CPOL = 0
      * CPHA = 0
@@ -518,6 +393,9 @@ static void MX_SPI1_Init(void)
      * APB2 = 84 MHz
      *
      * 84 / 8 = 10.5 MHz
+     *
+     * This is the same SPI speed used
+     * by the previously working LCD driver.
      */
     hspi1.Init.BaudRatePrescaler =
         SPI_BAUDRATEPRESCALER_8;
@@ -529,7 +407,7 @@ static void MX_SPI1_Init(void)
         SPI_FIRSTBIT_MSB;
 
     /*
-     * Motorola mode
+     * Motorola SPI mode
      */
     hspi1.Init.TIMode =
         SPI_TIMODE_DISABLE;
@@ -543,19 +421,6 @@ static void MX_SPI1_Init(void)
     hspi1.Init.CRCPolynomial =
         10;
 
-    /*
-     * HAL_SPI_Init()
-     *
-     * calls HAL_SPI_MspInit()
-     *
-     * which configures:
-     *
-     * PA5 = SCK
-     * PA6 = MISO
-     * PA7 = MOSI
-     *
-     * and DMA2 Stream3.
-     */
     if (
         HAL_SPI_Init(
             &hspi1
@@ -575,7 +440,9 @@ static void MX_GPIO_Init(void)
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
     /*
+     * ----------------------------------------------------------------------
      * GPIO clocks
+     * ----------------------------------------------------------------------
      */
     __HAL_RCC_GPIOA_CLK_ENABLE();
 
@@ -585,7 +452,7 @@ static void MX_GPIO_Init(void)
 
     /*
      * ----------------------------------------------------------------------
-     * Initial LCD states
+     * Initial LCD pin states
      *
      * CS    = HIGH
      * RESET = HIGH
