@@ -1,7 +1,8 @@
 /*
  * ili9341.c
  *
- * Based on the previously working ILI9341 driver.
+ * Working ILI9341 driver
+ * Blocking transfers + LVGL DMA transfer support
  */
 
 #include "ili9341.h"
@@ -24,28 +25,54 @@ static GPIO_TypeDef *RESET_port = NULL;
 static uint16_t RESET_pin = 0;
 
 /* -------------------------------------------------------------------------- */
-/* Write command                                                              */
+/* GPIO helpers                                                               */
 /* -------------------------------------------------------------------------- */
 
-void ILI9341_WriteCommand(uint8_t cmd)
+static void LCD_CS_Low(void)
 {
-    /*
-     * DC LOW = command
-     */
-    HAL_GPIO_WritePin(
-            DC_port,
-            DC_pin,
-            GPIO_PIN_RESET
-    );
-
-    /*
-     * CS LOW = select LCD
-     */
     HAL_GPIO_WritePin(
             CS_port,
             CS_pin,
             GPIO_PIN_RESET
     );
+}
+
+static void LCD_CS_High(void)
+{
+    HAL_GPIO_WritePin(
+            CS_port,
+            CS_pin,
+            GPIO_PIN_SET
+    );
+}
+
+static void LCD_DC_Command(void)
+{
+    HAL_GPIO_WritePin(
+            DC_port,
+            DC_pin,
+            GPIO_PIN_RESET
+    );
+}
+
+static void LCD_DC_Data(void)
+{
+    HAL_GPIO_WritePin(
+            DC_port,
+            DC_pin,
+            GPIO_PIN_SET
+    );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Blocking command                                                           */
+/* -------------------------------------------------------------------------- */
+
+void ILI9341_WriteCommand(uint8_t cmd)
+{
+    LCD_DC_Command();
+
+    LCD_CS_Low();
 
     HAL_SPI_Transmit(
             hspi,
@@ -54,39 +81,18 @@ void ILI9341_WriteCommand(uint8_t cmd)
             HAL_MAX_DELAY
     );
 
-    /*
-     * CS HIGH = deselect LCD
-     */
-    HAL_GPIO_WritePin(
-            CS_port,
-            CS_pin,
-            GPIO_PIN_SET
-    );
+    LCD_CS_High();
 }
 
 /* -------------------------------------------------------------------------- */
-/* Write 8-bit data                                                           */
+/* Blocking data                                                              */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_WriteData(uint8_t data)
 {
-    /*
-     * DC HIGH = data
-     */
-    HAL_GPIO_WritePin(
-            DC_port,
-            DC_pin,
-            GPIO_PIN_SET
-    );
+    LCD_DC_Data();
 
-    /*
-     * Select LCD
-     */
-    HAL_GPIO_WritePin(
-            CS_port,
-            CS_pin,
-            GPIO_PIN_RESET
-    );
+    LCD_CS_Low();
 
     HAL_SPI_Transmit(
             hspi,
@@ -95,41 +101,26 @@ void ILI9341_WriteData(uint8_t data)
             HAL_MAX_DELAY
     );
 
-    /*
-     * Deselect LCD
-     */
-    HAL_GPIO_WritePin(
-            CS_port,
-            CS_pin,
-            GPIO_PIN_SET
-    );
+    LCD_CS_High();
 }
 
 /* -------------------------------------------------------------------------- */
-/* Write 16-bit RGB565                                                        */
+/* Blocking RGB565                                                            */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_WriteData16(uint16_t data)
 {
     uint8_t buffer[2];
 
-    /*
-     * ILI9341 wants MSB first.
-     */
-    buffer[0] = (uint8_t)(data >> 8);
-    buffer[1] = (uint8_t)(data & 0xFF);
+    buffer[0] =
+            (uint8_t)(data >> 8);
 
-    HAL_GPIO_WritePin(
-            DC_port,
-            DC_pin,
-            GPIO_PIN_SET
-    );
+    buffer[1] =
+            (uint8_t)(data & 0xFF);
 
-    HAL_GPIO_WritePin(
-            CS_port,
-            CS_pin,
-            GPIO_PIN_RESET
-    );
+    LCD_DC_Data();
+
+    LCD_CS_Low();
 
     HAL_SPI_Transmit(
             hspi,
@@ -138,15 +129,11 @@ void ILI9341_WriteData16(uint16_t data)
             HAL_MAX_DELAY
     );
 
-    HAL_GPIO_WritePin(
-            CS_port,
-            CS_pin,
-            GPIO_PIN_SET
-    );
+    LCD_CS_High();
 }
 
 /* -------------------------------------------------------------------------- */
-/* Set address window                                                         */
+/* Address window                                                             */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_SetAddressWindow(
@@ -155,9 +142,6 @@ void ILI9341_SetAddressWindow(
         uint16_t x1,
         uint16_t y1)
 {
-    /*
-     * Column address
-     */
     ILI9341_WriteCommand(
             ILI9341_CASET
     );
@@ -178,9 +162,6 @@ void ILI9341_SetAddressWindow(
             (uint8_t)(x1 & 0xFF)
     );
 
-    /*
-     * Page address
-     */
     ILI9341_WriteCommand(
             ILI9341_PASET
     );
@@ -201,16 +182,13 @@ void ILI9341_SetAddressWindow(
             (uint8_t)(y1 & 0xFF)
     );
 
-    /*
-     * Start memory write
-     */
     ILI9341_WriteCommand(
             ILI9341_RAMWR
     );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Fill screen                                                                */
+/* Full screen blocking                                                       */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_FillScreen(uint16_t color)
@@ -235,6 +213,61 @@ void ILI9341_FillScreen(uint16_t color)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Start DMA transmission                                                    */
+/* -------------------------------------------------------------------------- */
+
+HAL_StatusTypeDef ILI9341_StartDMATransmit(
+        uint8_t *data,
+        uint16_t size)
+{
+    HAL_StatusTypeDef status;
+
+    if (
+            hspi == NULL ||
+            data == NULL ||
+            size == 0U
+    )
+    {
+        return HAL_ERROR;
+    }
+
+    /*
+     * RAMWR command has already been sent by
+     * ILI9341_SetAddressWindow().
+     *
+     * Keep CS LOW during the entire DMA transfer.
+     */
+    LCD_DC_Data();
+
+    LCD_CS_Low();
+
+    status = HAL_SPI_Transmit_DMA(
+            hspi,
+            data,
+            size
+    );
+
+    /*
+     * If DMA could not start, release CS.
+     */
+    if (status != HAL_OK)
+    {
+        LCD_CS_High();
+    }
+
+    return status;
+}
+
+/* -------------------------------------------------------------------------- */
+/* DMA transfer finished                                                      */
+/* -------------------------------------------------------------------------- */
+
+void ILI9341_DMA_End(void)
+{
+    LCD_CS_High();
+}
+
+/* -------------------------------------------------------------------------- */
 /* Initialization                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -247,9 +280,6 @@ void ILI9341_Init(
         GPIO_TypeDef *RESET_port_instance,
         uint16_t RESET_pin_instance)
 {
-    /*
-     * Save handles and pins.
-     */
     hspi = hspi_instance;
 
     CS_port = CS_port_instance;
@@ -264,22 +294,12 @@ void ILI9341_Init(
     /*
      * Initial states
      */
-    HAL_GPIO_WritePin(
-            CS_port,
-            CS_pin,
-            GPIO_PIN_SET
-    );
+    LCD_CS_High();
 
-    HAL_GPIO_WritePin(
-            DC_port,
-            DC_pin,
-            GPIO_PIN_SET
-    );
+    LCD_DC_Data();
 
     /*
-     * --------------------------------------------------------------
      * Hardware reset
-     * --------------------------------------------------------------
      */
     HAL_GPIO_WritePin(
             RESET_port,
@@ -298,9 +318,7 @@ void ILI9341_Init(
     HAL_Delay(120);
 
     /*
-     * --------------------------------------------------------------
      * Software reset
-     * --------------------------------------------------------------
      */
     ILI9341_WriteCommand(
             ILI9341_SWRESET
@@ -309,9 +327,7 @@ void ILI9341_Init(
     HAL_Delay(150);
 
     /*
-     * --------------------------------------------------------------
      * Power control 1
-     * --------------------------------------------------------------
      */
     ILI9341_WriteCommand(
             ILI9341_PWCTR1
@@ -322,9 +338,7 @@ void ILI9341_Init(
     );
 
     /*
-     * --------------------------------------------------------------
      * Power control 2
-     * --------------------------------------------------------------
      */
     ILI9341_WriteCommand(
             ILI9341_PWCTR2
@@ -335,9 +349,7 @@ void ILI9341_Init(
     );
 
     /*
-     * --------------------------------------------------------------
      * VCOM control 1
-     * --------------------------------------------------------------
      */
     ILI9341_WriteCommand(
             ILI9341_VMCTR1
@@ -352,9 +364,7 @@ void ILI9341_Init(
     );
 
     /*
-     * --------------------------------------------------------------
      * VCOM control 2
-     * --------------------------------------------------------------
      */
     ILI9341_WriteCommand(
             ILI9341_VMCTR2
@@ -365,11 +375,7 @@ void ILI9341_Init(
     );
 
     /*
-     * --------------------------------------------------------------
-     * Memory access control
-     *
-     * 0x28 = Landscape + BGR
-     * --------------------------------------------------------------
+     * Landscape + BGR
      */
     ILI9341_WriteCommand(
             ILI9341_MADCTL
@@ -380,11 +386,7 @@ void ILI9341_Init(
     );
 
     /*
-     * --------------------------------------------------------------
-     * Pixel format
-     *
-     * 0x55 = 16 bit RGB565
-     * --------------------------------------------------------------
+     * RGB565
      */
     ILI9341_WriteCommand(
             ILI9341_PIXFMT
@@ -395,9 +397,7 @@ void ILI9341_Init(
     );
 
     /*
-     * --------------------------------------------------------------
      * Sleep out
-     * --------------------------------------------------------------
      */
     ILI9341_WriteCommand(
             ILI9341_SLPOUT
@@ -406,9 +406,7 @@ void ILI9341_Init(
     HAL_Delay(120);
 
     /*
-     * --------------------------------------------------------------
-     * Normal display mode
-     * --------------------------------------------------------------
+     * Normal mode
      */
     ILI9341_WriteCommand(
             ILI9341_NORON
@@ -417,9 +415,7 @@ void ILI9341_Init(
     HAL_Delay(10);
 
     /*
-     * --------------------------------------------------------------
      * Display ON
-     * --------------------------------------------------------------
      */
     ILI9341_WriteCommand(
             ILI9341_DISPON
@@ -429,7 +425,7 @@ void ILI9341_Init(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Draw pixel                                                                 */
+/* Pixel                                                                      */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_DrawPixel(
@@ -439,7 +435,8 @@ void ILI9341_DrawPixel(
 {
     if (
             x >= ILI9341_WIDTH ||
-            y >= ILI9341_HEIGHT)
+            y >= ILI9341_HEIGHT
+    )
     {
         return;
     }
@@ -457,7 +454,7 @@ void ILI9341_DrawPixel(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Fill rectangle                                                             */
+/* Rectangle fill                                                             */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_FillRectangle(
@@ -470,8 +467,9 @@ void ILI9341_FillRectangle(
     if (
             x >= ILI9341_WIDTH ||
             y >= ILI9341_HEIGHT ||
-            w == 0 ||
-            h == 0)
+            w == 0U ||
+            h == 0U
+    )
     {
         return;
     }
@@ -505,20 +503,9 @@ void ILI9341_FillRectangle(
     color_data[1] =
             (uint8_t)(color & 0xFF);
 
-    /*
-     * Keep CS LOW for the whole rectangle.
-     */
-    HAL_GPIO_WritePin(
-            DC_port,
-            DC_pin,
-            GPIO_PIN_SET
-    );
+    LCD_DC_Data();
 
-    HAL_GPIO_WritePin(
-            CS_port,
-            CS_pin,
-            GPIO_PIN_RESET
-    );
+    LCD_CS_Low();
 
     while (pixels--)
     {
@@ -530,15 +517,11 @@ void ILI9341_FillRectangle(
         );
     }
 
-    HAL_GPIO_WritePin(
-            CS_port,
-            CS_pin,
-            GPIO_PIN_SET
-    );
+    LCD_CS_High();
 }
 
 /* -------------------------------------------------------------------------- */
-/* Draw image                                                                 */
+/* Image                                                                      */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_DrawImage(
@@ -555,7 +538,8 @@ void ILI9341_DrawImage(
 
     if (
             x >= ILI9341_WIDTH ||
-            y >= ILI9341_HEIGHT)
+            y >= ILI9341_HEIGHT
+    )
     {
         return;
     }
@@ -624,7 +608,8 @@ void ILI9341_DrawLine(
 
         if (
                 x0 == x1 &&
-                y0 == y1)
+                y0 == y1
+        )
         {
             break;
         }
@@ -647,7 +632,7 @@ void ILI9341_DrawLine(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Fill circle                                                                */
+/* Circle                                                                     */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_FillCircle(
@@ -731,7 +716,7 @@ void ILI9341_FillCircle(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Rectangle outline                                                          */
+/* Rectangle                                                                  */
 /* -------------------------------------------------------------------------- */
 
 void ILI9341_DrawRectangle(
@@ -742,10 +727,11 @@ void ILI9341_DrawRectangle(
         uint16_t color)
 {
     if (
-            w == 0 ||
-            h == 0 ||
+            w == 0U ||
+            h == 0U ||
             x >= ILI9341_WIDTH ||
-            y >= ILI9341_HEIGHT)
+            y >= ILI9341_HEIGHT
+    )
     {
         return;
     }

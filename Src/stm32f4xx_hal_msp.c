@@ -1,23 +1,34 @@
 /**
   ******************************************************************************
   * @file    stm32f4xx_hal_msp.c
+  * @brief   HAL MSP initialization
   ******************************************************************************
   */
 
 #include "main.h"
 
 /*
- * Defined in main.c
+ * DMA handle defined in main.c
  */
 extern DMA_HandleTypeDef hdma_spi1_tx;
+
+/* -------------------------------------------------------------------------- */
+/* Global MSP                                                                 */
+/* -------------------------------------------------------------------------- */
 
 void HAL_MspInit(void)
 {
     __HAL_RCC_SYSCFG_CLK_ENABLE();
+
     __HAL_RCC_PWR_CLK_ENABLE();
 }
 
-void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
+/* -------------------------------------------------------------------------- */
+/* SPI1 MSP                                                                   */
+/* -------------------------------------------------------------------------- */
+
+void HAL_SPI_MspInit(
+        SPI_HandleTypeDef *hspi)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
@@ -68,9 +79,10 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
         __HAL_RCC_DMA2_CLK_ENABLE();
 
         /*
-         * SPI1 TX:
+         * SPI1 TX
          *
-         * DMA2 Stream3 Channel3
+         * DMA2 Stream3
+         * Channel3
          */
         hdma_spi1_tx.Instance =
                 DMA2_Stream3;
@@ -102,23 +114,48 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
         hdma_spi1_tx.Init.FIFOMode =
                 DMA_FIFOMODE_DISABLE;
 
-        if (HAL_DMA_Init(&hdma_spi1_tx) != HAL_OK)
+        /*
+         * Initialize DMA
+         */
+        if (
+                HAL_DMA_Init(
+                        &hdma_spi1_tx
+                ) != HAL_OK
+        )
         {
             Error_Handler();
         }
 
         /*
-         * Link DMA to SPI
+         * Link DMA to SPI1
          */
         __HAL_LINKDMA(
                 hspi,
                 hdmatx,
                 hdma_spi1_tx
         );
+
+        /*
+         * DMA interrupt
+         */
+        HAL_NVIC_SetPriority(
+                DMA2_Stream3_IRQn,
+                5,
+                0
+        );
+
+        HAL_NVIC_EnableIRQ(
+                DMA2_Stream3_IRQn
+        );
     }
 }
 
-void HAL_SPI_MspDeInit(SPI_HandleTypeDef *hspi)
+/* -------------------------------------------------------------------------- */
+/* SPI1 MSP DeInit                                                            */
+/* -------------------------------------------------------------------------- */
+
+void HAL_SPI_MspDeInit(
+        SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI1)
     {
@@ -133,6 +170,10 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef *hspi)
 
         HAL_DMA_DeInit(
                 hspi->hdmatx
+        );
+
+        HAL_NVIC_DisableIRQ(
+                DMA2_Stream3_IRQn
         );
     }
 }

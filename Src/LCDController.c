@@ -13,7 +13,7 @@
 #include <stdbool.h>
 
 /* -------------------------------------------------------------------------- */
-/* Resolution                                                                 */
+/* Display resolution                                                         */
 /* -------------------------------------------------------------------------- */
 
 #ifndef MY_DISP_HOR_RES
@@ -24,8 +24,48 @@
 #define MY_DISP_VER_RES    240
 #endif
 
+/*
+ * LVGL draw buffer height
+ *
+ * Must match the buffers below.
+ */
+#define LVGL_BUFFER_LINES  10U
+
+/*
+ * Maximum DMA buffer size:
+ *
+ * 320 pixels × 10 lines × 2 bytes
+ *
+ * = 6400 bytes
+ */
+#define DMA_BUFFER_SIZE \
+    (MY_DISP_HOR_RES * LVGL_BUFFER_LINES * 2U)
+
 /* -------------------------------------------------------------------------- */
-/* Update enable                                                              */
+/* External SPI handle                                                        */
+/* -------------------------------------------------------------------------- */
+
+extern SPI_HandleTypeDef hspi1;
+
+/* -------------------------------------------------------------------------- */
+/* LVGL driver state                                                          */
+/* -------------------------------------------------------------------------- */
+
+static lv_disp_drv_t *active_disp_drv = NULL;
+
+static volatile bool dma_flush_active = false;
+
+/*
+ * Separate DMA buffer.
+ *
+ * LVGL buffer is NOT modified directly.
+ *
+ * This is important because LVGL owns its draw buffer.
+ */
+static uint8_t dma_buffer[DMA_BUFFER_SIZE];
+
+/* -------------------------------------------------------------------------- */
+/* Flush update enable                                                        */
 /* -------------------------------------------------------------------------- */
 
 volatile bool disp_flush_enabled = true;
@@ -43,7 +83,7 @@ static void disp_flush(
 );
 
 /* -------------------------------------------------------------------------- */
-/* LVGL display init                                                          */
+/* LVGL display initialization                                                */
 /* -------------------------------------------------------------------------- */
 
 void lv_port_disp_init(void)
@@ -51,11 +91,11 @@ void lv_port_disp_init(void)
     static lv_disp_draw_buf_t draw_buf_dsc;
 
     static lv_color_t buf_1[
-            MY_DISP_HOR_RES * 10
+        MY_DISP_HOR_RES * LVGL_BUFFER_LINES
     ];
 
     static lv_color_t buf_2[
-            MY_DISP_HOR_RES * 10
+        MY_DISP_HOR_RES * LVGL_BUFFER_LINES
     ];
 
     static lv_disp_drv_t disp_drv;
@@ -66,17 +106,17 @@ void lv_port_disp_init(void)
     disp_init();
 
     /*
-     * Draw buffers
+     * Initialize LVGL draw buffers
      */
     lv_disp_draw_buf_init(
             &draw_buf_dsc,
             buf_1,
             buf_2,
-            MY_DISP_HOR_RES * 10
+            MY_DISP_HOR_RES * LVGL_BUFFER_LINES
     );
 
     /*
-     * LVGL driver
+     * Initialize LVGL driver
      */
     lv_disp_drv_init(
             &disp_drv
@@ -95,7 +135,7 @@ void lv_port_disp_init(void)
             &draw_buf_dsc;
 
     /*
-     * Register driver
+     * Register display driver
      */
     lv_disp_drv_register(
             &disp_drv
@@ -103,7 +143,7 @@ void lv_port_disp_init(void)
 }
 
 /* -------------------------------------------------------------------------- */
-/* Enable / Disable                                                           */
+/* Enable / disable display updates                                           */
 /* -------------------------------------------------------------------------- */
 
 void disp_enable_update(void)
@@ -117,13 +157,11 @@ void disp_disable_update(void)
 }
 
 /* -------------------------------------------------------------------------- */
-/* LCD init                                                                   */
+/* LCD initialization                                                         */
 /* -------------------------------------------------------------------------- */
 
 static void disp_init(void)
 {
-    extern SPI_HandleTypeDef hspi1;
-
     ILI9341_Init(
             &hspi1,
 
@@ -148,16 +186,20 @@ static void disp_flush(
         lv_color_t *color_p
 )
 {
-    uint16_t x1;
-    uint16_t y1;
-    uint16_t x2;
-    uint16_t y2;
+    int32_t x1;
+    int32_t y1;
+    int32_t x2;
+    int32_t y2;
 
-    uint16_t width;
-    uint16_t height;
+    uint32_t width;
+    uint32_t height;
 
     uint32_t pixel_count;
+    uint32_t dma_bytes;
 
+    /*
+     * Display update disabled
+     */
     if (!disp_flush_enabled)
     {
         lv_disp_flush_ready(
@@ -167,47 +209,249 @@ static void disp_flush(
         return;
     }
 
-    x1 = (uint16_t)area->x1;
-    y1 = (uint16_t)area->y1;
-    x2 = (uint16_t)area->x2;
-    y2 = (uint16_t)area->y2;
+    /*
+     * Make sure previous DMA is finished.
+     *
+     * Normally this should always be false here because
+     * LVGL does not start a new flush until flush_ready().
+     */
+    if (dma_flush_active)
+    {
+        return;
+    }
+
+    /*
+     * Area coordinates
+     */
+    x1 = area->x1;
+    y1 = area->y1;
+    x2 = area->x2;
+    y2 = area->y2;
+
+    /*
+     * Safety clipping
+     */
+    if (x1 < 0)
+    {
+        x1 = 0;
+    }
+
+    if (y1 < 0)
+    {
+        y1 = 0;
+    }
+
+    if (x2 >= MY_DISP_HOR_RES)
+    {
+        x2 = MY_DISP_HOR_RES - 1;
+    }
+
+    if (y2 >= MY_DISP_VER_RES)
+    {
+        y2 = MY_DISP_VER_RES - 1;
+    }
+
+    /*
+     * Invalid area
+     */
+    if (
+            x1 > x2 ||
+            y1 > y2
+    )
+    {
+        lv_disp_flush_ready(
+                disp_drv
+        );
+
+        return;
+    }
 
     width =
-            (uint16_t)(x2 - x1 + 1U);
+            (uint32_t)(x2 - x1 + 1);
 
     height =
-            (uint16_t)(y2 - y1 + 1U);
+            (uint32_t)(y2 - y1 + 1);
 
     pixel_count =
-            (uint32_t)width *
-            (uint32_t)height;
+            width * height;
+
+    dma_bytes =
+            pixel_count * 2U;
 
     /*
-     * Set window
+     * The LVGL draw buffer is limited to 10 lines.
+     *
+     * Safety check.
      */
-    ILI9341_SetAddressWindow(
-            x1,
-            y1,
-            x2,
-            y2
-    );
+    if (dma_bytes > DMA_BUFFER_SIZE)
+    {
+        lv_disp_flush_ready(
+                disp_drv
+        );
+
+        return;
+    }
 
     /*
-     * Send RGB565 pixels
+     * ----------------------------------------------------------------------
+     * Convert LVGL RGB565 to ILI9341 SPI byte order.
+     *
+     * LVGL / STM32 memory:
+     *
+     *   low byte
+     *   high byte
+     *
+     * ILI9341 SPI:
+     *
+     *   high byte
+     *   low byte
+     *
+     * Therefore swap the bytes.
+     * ----------------------------------------------------------------------
      */
+
     for (uint32_t i = 0U;
          i < pixel_count;
          i++)
     {
-        ILI9341_WriteData16(
-                color_p[i].full
-        );
+        uint16_t pixel =
+                color_p[i].full;
+
+        dma_buffer[(i * 2U) + 0U] =
+                (uint8_t)(pixel >> 8);
+
+        dma_buffer[(i * 2U) + 1U] =
+                (uint8_t)(pixel & 0xFFU);
     }
 
     /*
-     * Flush finished
+     * Set LCD address window.
      */
-    lv_disp_flush_ready(
-            disp_drv
+    ILI9341_SetAddressWindow(
+            (uint16_t)x1,
+            (uint16_t)y1,
+            (uint16_t)x2,
+            (uint16_t)y2
     );
+
+    /*
+     * Save the LVGL driver.
+     *
+     * DMA callback will call lv_disp_flush_ready().
+     */
+    active_disp_drv =
+            disp_drv;
+
+    dma_flush_active =
+            true;
+
+    /*
+     * Start DMA.
+     *
+     * CS is kept LOW until DMA completion.
+     */
+    if (
+            ILI9341_StartDMATransmit(
+                    dma_buffer,
+                    (uint16_t)dma_bytes
+            ) != HAL_OK)
+    {
+        dma_flush_active =
+                false;
+
+        active_disp_drv =
+                NULL;
+
+        ILI9341_DMA_End();
+
+        lv_disp_flush_ready(
+                disp_drv
+        );
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* SPI DMA complete callback                                                  */
+/* -------------------------------------------------------------------------- */
+
+void HAL_SPI_TxCpltCallback(
+        SPI_HandleTypeDef *hspi)
+{
+    if (
+            hspi == NULL ||
+            hspi->Instance != SPI1
+    )
+    {
+        return;
+    }
+
+    /*
+     * DMA transfer completed.
+     *
+     * Release CS.
+     */
+    ILI9341_DMA_End();
+
+    /*
+     * Clear DMA state.
+     */
+    dma_flush_active =
+            false;
+
+    /*
+     * Tell LVGL that its buffer can be reused.
+     */
+    if (active_disp_drv != NULL)
+    {
+        lv_disp_drv_t *drv =
+                active_disp_drv;
+
+        active_disp_drv =
+                NULL;
+
+        lv_disp_flush_ready(
+                drv
+        );
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* SPI DMA error callback                                                     */
+/* -------------------------------------------------------------------------- */
+
+void HAL_SPI_ErrorCallback(
+        SPI_HandleTypeDef *hspi)
+{
+    if (
+            hspi == NULL ||
+            hspi->Instance != SPI1
+    )
+    {
+        return;
+    }
+
+    /*
+     * Release CS.
+     */
+    ILI9341_DMA_End();
+
+    dma_flush_active =
+            false;
+
+    /*
+     * Release LVGL flush even on error,
+     * otherwise LVGL will remain blocked forever.
+     */
+    if (active_disp_drv != NULL)
+    {
+        lv_disp_drv_t *drv =
+                active_disp_drv;
+
+        active_disp_drv =
+                NULL;
+
+        lv_disp_flush_ready(
+                drv
+        );
+    }
 }

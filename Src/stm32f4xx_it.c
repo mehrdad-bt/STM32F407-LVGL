@@ -7,17 +7,11 @@
   */
 /* USER CODE END Header */
 
-/* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f4xx_it.h"
-
-/* Private variables ---------------------------------------------------------*/
+#include "src/hal/lv_hal_tick.h"
 
 extern DMA_HandleTypeDef hdma_spi1_tx;
-
-/******************************************************************************/
-/* Cortex-M4 Processor Interruption and Exception Handlers                   */
-/******************************************************************************/
 
 void NMI_Handler(void)
 {
@@ -69,20 +63,13 @@ void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
     HAL_IncTick();
+
+    lv_tick_inc(1);
 }
 
-/******************************************************************************/
-/* Peripheral Interrupt Handlers                                             */
-/******************************************************************************/
-
-/*
- * SPI1 TX DMA
- *
- * DMA2 Stream3 Channel3
- */
 void DMA2_Stream3_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(
-            &hdma_spi1_tx
+        &hdma_spi1_tx
     );
 }
