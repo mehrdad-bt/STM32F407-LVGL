@@ -4,12 +4,6 @@
   * @file           : main.c
   * @brief          : Main program body
   ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  ******************************************************************************
   */
 /* USER CODE END Header */
 
@@ -21,6 +15,7 @@
 
 #include "lvgl.h"
 #include "LCDController.h"
+#include "TouchController.h"
 #include "ui/ui.h"
 
 /* USER CODE END Includes */
@@ -46,11 +41,6 @@
 
 SPI_HandleTypeDef hspi1;
 
-/*
- * DMA2 Stream3
- *
- * SPI1 TX DMA handle.
- */
 DMA_HandleTypeDef hdma_spi1_tx;
 
 /* USER CODE BEGIN PV */
@@ -86,11 +76,6 @@ int main(void)
 
     /* MCU Configuration--------------------------------------------------------*/
 
-    /*
-     * Reset peripherals
-     * Initialize Flash interface
-     * Initialize SysTick
-     */
     HAL_Init();
 
     /* USER CODE BEGIN Init */
@@ -98,7 +83,7 @@ int main(void)
     /* USER CODE END Init */
 
     /*
-     * Configure system clock
+     * Configure system clock.
      */
     SystemClock_Config();
 
@@ -107,73 +92,49 @@ int main(void)
     /* USER CODE END SysInit */
 
     /*
-     * Initialize GPIO
+     * Initialize GPIO.
      */
     MX_GPIO_Init();
 
     /*
-     * Initialize SPI1
-     *
-     * HAL_SPI_Init() automatically calls:
-     *
-     * HAL_SPI_MspInit()
-     *
-     * which configures:
-     *
-     * PA5 = SCK
-     * PA6 = MISO
-     * PA7 = MOSI
-     *
-     * and:
-     *
-     * DMA2 Stream3 Channel3
+     * Initialize SPI1 + DMA.
      */
     MX_SPI1_Init();
 
     /* USER CODE BEGIN 2 */
 
-    /*
-     * ----------------------------------------------------------------------
-     * LVGL initialization
-     * ----------------------------------------------------------------------
-     */
+    /* ---------------------------------------------------------------------- */
+    /* LVGL                                                                    */
+    /* ---------------------------------------------------------------------- */
+
     lv_init();
 
-    /*
-     * ----------------------------------------------------------------------
-     * ILI9341 + LVGL display driver
-     * ----------------------------------------------------------------------
-     *
-     * ILI9341:
-     *
-     * CS    = PB0
-     * DC    = PC5
-     * RESET = PB1
-     *
-     * SPI1:
-     *
-     * SCK   = PA5
-     * MISO  = PA6
-     * MOSI  = PA7
-     */
+    /* ---------------------------------------------------------------------- */
+    /* LCD                                                                      */
+    /* ---------------------------------------------------------------------- */
+
     lv_port_disp_init();
 
-    /*
-     * ----------------------------------------------------------------------
-     * EEZ generated UI
-     * ----------------------------------------------------------------------
-     *
-     * create_screens()
-     * loadScreen(SCREEN_ID_MAIN)
-     *
-     * are called internally by ui_init().
-     */
+    /* ---------------------------------------------------------------------- */
+    /* XPT2046                                                                  */
+    /* ---------------------------------------------------------------------- */
+
+    XPT2046_Init(
+        &hspi1,
+        TCS_GPIO_Port,
+        TCS_Pin
+    );
+
+    XPT2046_LVGL_Init();
+
+    /* ---------------------------------------------------------------------- */
+    /* EEZ Studio UI                                                           */
+    /* ---------------------------------------------------------------------- */
+
     ui_init();
 
     /*
-     * ----------------------------------------------------------------------
-     * Initial LVGL rendering
-     * ----------------------------------------------------------------------
+     * Force first screen rendering.
      */
     lv_refr_now(NULL);
 
@@ -185,41 +146,27 @@ int main(void)
     while (1)
     {
         /*
-         * ------------------------------------------------------------------
-         * EEZ Studio tick
-         * ------------------------------------------------------------------
-         *
-         * Updates the current EEZ screen.
+         * EEZ generated screen tick.
          */
         ui_tick();
 
         /*
-         * ------------------------------------------------------------------
-         * LVGL
-         * ------------------------------------------------------------------
+         * LVGL:
          *
-         * Handles:
-         *
+         * - input processing
          * - timers
          * - animations
-         * - invalidated objects
          * - rendering
-         * - display flush
-         *
-         * LCD flush uses SPI1 DMA.
+         * - LCD DMA flush
          */
         lv_timer_handler();
 
         /*
          * Small delay.
-         *
-         * SysTick continues running during this delay and
-         * stm32f4xx_it.c updates:
-         *
-         * HAL_GetTick()
-         * LVGL tick
          */
-        HAL_Delay(LVGL_TASK_PERIOD_MS);
+        HAL_Delay(
+            LVGL_TASK_PERIOD_MS
+        );
     }
 
     /* USER CODE END WHILE */
@@ -235,14 +182,14 @@ int main(void)
   */
 void SystemClock_Config(void)
 {
-    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_OscInitTypeDef RCC_OscInitStruct =
+        {0};
 
-    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct =
+        {0};
 
     /*
-     * ----------------------------------------------------------------------
      * Power
-     * ----------------------------------------------------------------------
      */
     __HAL_RCC_PWR_CLK_ENABLE();
 
@@ -251,10 +198,7 @@ void SystemClock_Config(void)
     );
 
     /*
-     * ----------------------------------------------------------------------
-     * HSI + PLL
-     *
-     * HSI  = 16 MHz
+     * HSI = 16 MHz
      *
      * PLLM = 8
      * PLLN = 168
@@ -262,9 +206,7 @@ void SystemClock_Config(void)
      * PLLQ = 4
      *
      * SYSCLK = 168 MHz
-     * ----------------------------------------------------------------------
      */
-
     RCC_OscInitStruct.OscillatorType =
         RCC_OSCILLATORTYPE_HSI;
 
@@ -302,16 +244,11 @@ void SystemClock_Config(void)
     }
 
     /*
-     * ----------------------------------------------------------------------
-     * CPU / AHB / APB
-     *
      * SYSCLK = 168 MHz
      * HCLK   = 168 MHz
      * APB1   = 42 MHz
      * APB2   = 84 MHz
-     * ----------------------------------------------------------------------
      */
-
     RCC_ClkInitStruct.ClockType =
         RCC_CLOCKTYPE_HCLK |
         RCC_CLOCKTYPE_SYSCLK |
@@ -347,9 +284,6 @@ void SystemClock_Config(void)
   */
 static void MX_SPI1_Init(void)
 {
-    /*
-     * SPI1
-     */
     hspi1.Instance =
         SPI1;
 
@@ -360,7 +294,7 @@ static void MX_SPI1_Init(void)
         SPI_MODE_MASTER;
 
     /*
-     * 2-line
+     * Full duplex
      */
     hspi1.Init.Direction =
         SPI_DIRECTION_2LINES;
@@ -373,9 +307,6 @@ static void MX_SPI1_Init(void)
 
     /*
      * SPI Mode 0
-     *
-     * CPOL = 0
-     * CPHA = 0
      */
     hspi1.Init.CLKPolarity =
         SPI_POLARITY_LOW;
@@ -394,8 +325,10 @@ static void MX_SPI1_Init(void)
      *
      * 84 / 8 = 10.5 MHz
      *
-     * This is the same SPI speed used
-     * by the previously working LCD driver.
+     * Used by ILI9341.
+     *
+     * XPT2046 temporarily changes this
+     * to prescaler 64.
      */
     hspi1.Init.BaudRatePrescaler =
         SPI_BAUDRATEPRESCALER_8;
@@ -406,15 +339,9 @@ static void MX_SPI1_Init(void)
     hspi1.Init.FirstBit =
         SPI_FIRSTBIT_MSB;
 
-    /*
-     * Motorola SPI mode
-     */
     hspi1.Init.TIMode =
         SPI_TIMODE_DISABLE;
 
-    /*
-     * CRC disabled
-     */
     hspi1.Init.CRCCalculation =
         SPI_CRCCALCULATION_DISABLE;
 
@@ -437,7 +364,8 @@ static void MX_SPI1_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitTypeDef GPIO_InitStruct =
+        {0};
 
     /*
      * ----------------------------------------------------------------------
@@ -450,16 +378,19 @@ static void MX_GPIO_Init(void)
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
 
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+
     /*
      * ----------------------------------------------------------------------
-     * Initial LCD pin states
+     * Initial LCD states
+     * ----------------------------------------------------------------------
      *
      * CS    = HIGH
      * RESET = HIGH
      * DC    = HIGH
-     * ----------------------------------------------------------------------
+     *
+     * Touch CS = HIGH
      */
-
     HAL_GPIO_WritePin(
         GPIOB,
         GPIO_PIN_0,
@@ -478,13 +409,18 @@ static void MX_GPIO_Init(void)
         GPIO_PIN_SET
     );
 
+    HAL_GPIO_WritePin(
+        GPIOE,
+        GPIO_PIN_9,
+        GPIO_PIN_SET
+    );
+
     /*
      * ----------------------------------------------------------------------
      * PB0 = LCD CS
      * PB1 = LCD RESET
      * ----------------------------------------------------------------------
      */
-
     GPIO_InitStruct.Pin =
         GPIO_PIN_0 |
         GPIO_PIN_1;
@@ -508,7 +444,6 @@ static void MX_GPIO_Init(void)
      * PC5 = LCD DC
      * ----------------------------------------------------------------------
      */
-
     GPIO_InitStruct.Pin =
         GPIO_PIN_5;
 
@@ -523,6 +458,28 @@ static void MX_GPIO_Init(void)
 
     HAL_GPIO_Init(
         GPIOC,
+        &GPIO_InitStruct
+    );
+
+    /*
+     * ----------------------------------------------------------------------
+     * PE9 = XPT2046 TCS
+     * ----------------------------------------------------------------------
+     */
+    GPIO_InitStruct.Pin =
+        GPIO_PIN_9;
+
+    GPIO_InitStruct.Mode =
+        GPIO_MODE_OUTPUT_PP;
+
+    GPIO_InitStruct.Pull =
+        GPIO_NOPULL;
+
+    GPIO_InitStruct.Speed =
+        GPIO_SPEED_FREQ_LOW;
+
+    HAL_GPIO_Init(
+        GPIOE,
         &GPIO_InitStruct
     );
 }
@@ -542,13 +499,6 @@ void Error_Handler(void)
 
 #ifdef USE_FULL_ASSERT
 
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
 void assert_failed(
     uint8_t *file,
     uint32_t line)
