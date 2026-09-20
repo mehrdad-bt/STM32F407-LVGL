@@ -40,7 +40,9 @@ void create_screen_main() {
             {
                 lv_obj_t *parent_obj = obj;
                 {
+                    // calibration_text
                     lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.calibration_text = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -51,25 +53,10 @@ void create_screen_main() {
         {
             // Persian_text
             lv_obj_t *obj = lv_label_create(parent_obj);
-
             objects.persian_text = obj;
-
-            lv_obj_set_pos(
-                obj,
-                136,
-                84
-            );
-
-            lv_obj_set_size(
-                obj,
-                LV_SIZE_CONTENT,
-                LV_SIZE_CONTENT
-            );
-
-            lv_label_set_text_static(
-                obj,
-                ""
-            );
+            lv_obj_set_pos(obj, 136, 84);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text_static(obj, "");
         }
     }
     

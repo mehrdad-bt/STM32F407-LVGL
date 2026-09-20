@@ -18,6 +18,7 @@ enum ScreensEnum {
 typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *calibration_button;
+    lv_obj_t *calibration_text;
     lv_obj_t *persian_text;
 } objects_t;
 
