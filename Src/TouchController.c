@@ -171,7 +171,7 @@ static bool Touch_SPI_Fast(void)
     MODIFY_REG(
         touch_hspi->Instance->CR1,
         SPI_CR1_BR,
-        SPI_BAUDRATEPRESCALER_4
+        SPI_BAUDRATEPRESCALER_2
     );
 
     __HAL_SPI_ENABLE(

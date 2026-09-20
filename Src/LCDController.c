@@ -29,7 +29,7 @@
  *
  * Must match the buffers below.
  */
-#define LVGL_BUFFER_LINES  10U
+#define LVGL_BUFFER_LINES  20U
 
 /*
  * Maximum DMA buffer size:
@@ -38,8 +38,6 @@
  *
  * = 6400 bytes
  */
-#define DMA_BUFFER_SIZE \
-    (MY_DISP_HOR_RES * LVGL_BUFFER_LINES * 2U)
 
 /* -------------------------------------------------------------------------- */
 /* External SPI handle                                                        */
@@ -62,7 +60,7 @@ static volatile bool dma_flush_active = false;
  *
  * This is important because LVGL owns its draw buffer.
  */
-static uint8_t dma_buffer[DMA_BUFFER_SIZE];
+
 
 /* -------------------------------------------------------------------------- */
 /* Flush update enable                                                        */
@@ -193,7 +191,6 @@ static void disp_flush(
 
     uint32_t width;
     uint32_t height;
-
     uint32_t pixel_count;
     uint32_t dma_bytes;
 
@@ -210,10 +207,7 @@ static void disp_flush(
     }
 
     /*
-     * Make sure previous DMA is finished.
-     *
-     * Normally this should always be false here because
-     * LVGL does not start a new flush until flush_ready().
+     * Previous DMA should already be finished.
      */
     if (dma_flush_active)
     {
@@ -279,52 +273,6 @@ static void disp_flush(
             pixel_count * 2U;
 
     /*
-     * The LVGL draw buffer is limited to 10 lines.
-     *
-     * Safety check.
-     */
-    if (dma_bytes > DMA_BUFFER_SIZE)
-    {
-        lv_disp_flush_ready(
-                disp_drv
-        );
-
-        return;
-    }
-
-    /*
-     * ----------------------------------------------------------------------
-     * Convert LVGL RGB565 to ILI9341 SPI byte order.
-     *
-     * LVGL / STM32 memory:
-     *
-     *   low byte
-     *   high byte
-     *
-     * ILI9341 SPI:
-     *
-     *   high byte
-     *   low byte
-     *
-     * Therefore swap the bytes.
-     * ----------------------------------------------------------------------
-     */
-
-    for (uint32_t i = 0U;
-         i < pixel_count;
-         i++)
-    {
-        uint16_t pixel =
-                color_p[i].full;
-
-        dma_buffer[(i * 2U) + 0U] =
-                (uint8_t)(pixel >> 8);
-
-        dma_buffer[(i * 2U) + 1U] =
-                (uint8_t)(pixel & 0xFFU);
-    }
-
-    /*
      * Set LCD address window.
      */
     ILI9341_SetAddressWindow(
@@ -346,13 +294,11 @@ static void disp_flush(
             true;
 
     /*
-     * Start DMA.
-     *
-     * CS is kept LOW until DMA completion.
+     * Start DMA directly from LVGL draw buffer.
      */
     if (
             ILI9341_StartDMATransmit(
-                    dma_buffer,
+                    (uint8_t *)color_p,
                     (uint16_t)dma_bytes
             ) != HAL_OK)
     {
