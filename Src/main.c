@@ -17,6 +17,7 @@
 #include "LCDController.h"
 #include "TouchController.h"
 #include "ui/ui.h"
+#include "PersianText.h"
 
 /* USER CODE END Includes */
 
@@ -132,6 +133,7 @@ int main(void)
     /* ---------------------------------------------------------------------- */
 
     ui_init();
+    PersianText_Init();
 
     /*
      * Force first screen rendering.

@@ -49,12 +49,27 @@ void create_screen_main() {
             }
         }
         {
+            // Persian_text
             lv_obj_t *obj = lv_label_create(parent_obj);
-            objects.obj0 = obj;
-            lv_obj_set_pos(obj, 110, 76);
-            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_obj_set_style_text_color(obj, lv_color_hex(0xfcfcfc), LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_label_set_text_static(obj, "HELLO THERE !");
+
+            objects.persian_text = obj;
+
+            lv_obj_set_pos(
+                obj,
+                136,
+                84
+            );
+
+            lv_obj_set_size(
+                obj,
+                LV_SIZE_CONTENT,
+                LV_SIZE_CONTENT
+            );
+
+            lv_label_set_text_static(
+                obj,
+                ""
+            );
         }
     }
     
