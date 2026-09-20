@@ -14,7 +14,7 @@ void PersianText_Init(void)
 
     lv_obj_set_style_text_font(
         objects.persian_text,
-        &vazirmatn_24_vertical_fixed,
+        &font_persian_24,
         LV_PART_MAIN | LV_STATE_DEFAULT
     );
 
@@ -36,6 +36,6 @@ void PersianText_Init(void)
         LV_PART_MAIN | LV_STATE_DEFAULT
     );
 
-    lv_label_set_text(objects.persian_text, "مشکل امروز جامعه ما حل شده");
+    lv_label_set_text(objects.persian_text, "ولتاژ پایین تر از حد مجاز");
     lv_obj_invalidate(objects.persian_text);
 }

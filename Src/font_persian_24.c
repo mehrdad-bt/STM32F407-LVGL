@@ -5578,7 +5578,7 @@ static const lv_font_fmt_txt_dsc_t font_dsc = {
 #endif
 };
 
-const lv_font_t vazirmatn_24_vertical_fixed = {
+const lv_font_t font_persian_24 = {
     .get_glyph_dsc = lv_font_get_glyph_dsc_fmt_txt,
     .get_glyph_bitmap = lv_font_get_bitmap_fmt_txt,
     .line_height = 38,

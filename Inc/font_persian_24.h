@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-extern const lv_font_t vazirmatn_24_vertical_fixed;
+extern const lv_font_t font_persian_24;
 
 #ifdef __cplusplus
 }
