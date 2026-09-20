@@ -333,7 +333,7 @@ static void MX_SPI1_Init(void)
      * to prescaler 64.
      */
     hspi1.Init.BaudRatePrescaler =
-        SPI_BAUDRATEPRESCALER_8;
+        SPI_BAUDRATEPRESCALER_4;
 
     /*
      * MSB first
