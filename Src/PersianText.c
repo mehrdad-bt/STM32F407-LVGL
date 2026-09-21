@@ -1,6 +1,7 @@
 #include "font_persian_14.h"
 #include "font_persian_24.h"
 #include "PersianText.h"
+#include "data_transfer_animation.h"
 
 #include "lvgl.h"
 #include "ui/ui.h"
@@ -12,7 +13,7 @@ void PersianText_Init(void)
     /* ---------------------------------------------------------------------- */
     /* Calibration Text                                                       */
     /* ---------------------------------------------------------------------- */
-
+	 data_transfer_animation_start(objects.main);
     if (objects.calibration_text != NULL)
     {
         lv_label_set_text(
@@ -29,6 +30,11 @@ void PersianText_Init(void)
         lv_obj_set_style_base_dir(
             objects.calibration_text,
             LV_BASE_DIR_RTL,
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+        lv_obj_set_style_text_color(
+            objects.calibration_text,
+            lv_color_hex(0x000000),
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
     }
@@ -57,6 +63,11 @@ void PersianText_Init(void)
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
         lv_obj_set_pos(objects.information_indicator, 140, 1);
+        lv_obj_set_style_text_color(
+            objects.information_indicator,
+            lv_color_hex(0xffffff),
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
     }
 
     /* ---------------------------------------------------------------------- */
@@ -82,6 +93,11 @@ void PersianText_Init(void)
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
         lv_obj_set_pos(objects.error_hide_text, 120, 200);
+        lv_obj_set_style_text_color(
+            objects.error_hide_text,
+            lv_color_hex(0xffffff),
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
     }
 
 }

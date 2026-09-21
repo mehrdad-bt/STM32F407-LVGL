@@ -33,6 +33,11 @@ void create_screen_main() {
     objects.main = obj;
     lv_obj_set_pos(obj, 0, 0);
     lv_obj_set_size(obj, 320, 240);
+    lv_obj_set_style_bg_color(
+        obj,
+        lv_color_hex(0x000000),
+        LV_PART_MAIN | LV_STATE_DEFAULT
+    );
     {
         lv_obj_t *parent_obj = obj;
         {
@@ -42,7 +47,7 @@ void create_screen_main() {
             lv_obj_set_pos(obj, 8, 180);
             lv_obj_set_size(obj, 100, 50);
             lv_obj_add_event_cb(obj, action_calibration, LV_EVENT_RELEASED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xf3218b), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_bg_color(obj, lv_color_hex(0x00fff4), LV_PART_MAIN | LV_STATE_DEFAULT);
             {
                 lv_obj_t *parent_obj = obj;
                 {
