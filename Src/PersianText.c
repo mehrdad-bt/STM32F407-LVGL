@@ -1,8 +1,5 @@
 #include "font_persian_14.h"
-#include "font_persian_24.h"
 #include "PersianText.h"
-#include "data_transfer_animation.h"
-
 #include "lvgl.h"
 #include "ui/ui.h"
 #include "ui/screens.h"
@@ -13,7 +10,7 @@ void PersianText_Init(void)
     /* ---------------------------------------------------------------------- */
     /* Calibration Text                                                       */
     /* ---------------------------------------------------------------------- */
-	 data_transfer_animation_start(objects.main);
+
     if (objects.calibration_text != NULL)
     {
         lv_label_set_text(
@@ -32,6 +29,7 @@ void PersianText_Init(void)
             LV_BASE_DIR_RTL,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
+
         lv_obj_set_style_text_color(
             objects.calibration_text,
             lv_color_hex(0x000000),
@@ -39,8 +37,9 @@ void PersianText_Init(void)
         );
     }
 
+
     /* ---------------------------------------------------------------------- */
-    /* temp_button_text                                                      */
+    /* temp_button_text                                                       */
     /* ---------------------------------------------------------------------- */
 
     if (objects.temp_button_text != NULL)
@@ -61,6 +60,7 @@ void PersianText_Init(void)
             LV_BASE_DIR_RTL,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
+
         lv_obj_set_style_text_color(
             objects.temp_button_text,
             lv_color_hex(0x000000),
@@ -68,8 +68,9 @@ void PersianText_Init(void)
         );
     }
 
+
     /* ---------------------------------------------------------------------- */
-    /* temp_exit_button_text                                                    */
+    /* temp_exit_button_text                                                  */
     /* ---------------------------------------------------------------------- */
 
     if (objects.temp_exit_button_text != NULL)
@@ -90,6 +91,7 @@ void PersianText_Init(void)
             LV_BASE_DIR_RTL,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
+
         lv_obj_set_style_text_color(
             objects.temp_exit_button_text,
             lv_color_hex(0xffffff),
@@ -106,7 +108,7 @@ void PersianText_Init(void)
     {
         lv_label_set_text(
             objects.information_indicator,
-            "در حال دریافت اطلاعات"
+            ""
         );
 
         lv_obj_set_style_text_font(
@@ -120,11 +122,28 @@ void PersianText_Init(void)
             LV_BASE_DIR_RTL,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
-        lv_obj_set_pos(objects.information_indicator, 40, 5);
+
+        lv_obj_set_pos(
+            objects.information_indicator,
+            40,
+            5
+        );
+
+        /*
+         * Initially hidden.
+         *
+         * It will be shown when UART data is received.
+         */
+
+        lv_obj_add_flag(
+            objects.information_indicator,
+            LV_OBJ_FLAG_HIDDEN
+        );
     }
 
+
     /* ---------------------------------------------------------------------- */
-    /* Error Hide/Show                                                  */
+    /* Error Hide/Show                                                        */
     /* ---------------------------------------------------------------------- */
 
     if (objects.error_hide_text != NULL)
@@ -145,12 +164,17 @@ void PersianText_Init(void)
             LV_BASE_DIR_RTL,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
-        lv_obj_set_pos(objects.error_hide_text, 120, 200);
+
+        lv_obj_set_pos(
+            objects.error_hide_text,
+            120,
+            200
+        );
+
         lv_obj_set_style_text_color(
             objects.error_hide_text,
             lv_color_hex(0xffffff),
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
     }
-
 }
