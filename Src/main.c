@@ -23,20 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include <stdio.h>
-#include <stdlib.h>
-
-#include "lvgl.h"
-#include "LCDController.h"
-#include "TouchController.h"
-#include "ui/ui.h"
-#include "PersianText.h"
-#include "MessageBox.h"
-#include "Animation.h"
-#include "AHT10.h"
-#include "TempPage.h"
-#include "data_transfer_animation.h"
-#include "font_persian_14.h"
+#include "Application.h"
 
 /* USER CODE END Includes */
 
@@ -47,15 +34,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-#define LVGL_TASK_PERIOD_MS      5U
-
-/* ==================================================
-   UART CONFIGURATION
-   ================================================== */
-
-#define UART_RX_BUFFER_SIZE      64U
-#define UART_TIMEOUT_MS          500U
 
 /* USER CODE END PD */
 
@@ -69,30 +47,11 @@
 I2C_HandleTypeDef hi2c1;
 
 SPI_HandleTypeDef hspi1;
-
 DMA_HandleTypeDef hdma_spi1_tx;
 
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-
-/* UART RX */
-
-static uint8_t uart_rx_byte = 0;
-
-static char uart_rx_buffer[UART_RX_BUFFER_SIZE];
-
-static volatile uint8_t uart_rx_index = 0;
-
-static volatile uint8_t uart_packet_ready = 0;
-
-static float uart_voltage = 0.0f;
-
-static float uart_current = 0.0f;
-
-static uint32_t uart_last_valid_packet_time = 0;
-
-static uint8_t uart_link_active = 0;
 
 /* USER CODE END PV */
 
@@ -101,26 +60,12 @@ static uint8_t uart_link_active = 0;
 void SystemClock_Config(void);
 
 static void MX_GPIO_Init(void);
-
 static void MX_DMA_Init(void);
-
 static void MX_SPI1_Init(void);
-
 static void MX_I2C1_Init(void);
-
 static void MX_USART1_UART_Init(void);
 
 /* USER CODE BEGIN PFP */
-
-/* ==================================================
-   UART PACKET PARSER
-   ================================================== */
-
-static uint8_t UART_ParsePacket(
-    const char *buffer,
-    float *voltage,
-    float *current
-);
 
 /* USER CODE END PFP */
 
@@ -168,65 +113,10 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   /* ---------------------------------------------------------------------- */
-  /* UART                                                                  */
+  /* Application                                                            */
   /* ---------------------------------------------------------------------- */
 
-  if (HAL_UART_Receive_IT(
-          &huart1,
-          &uart_rx_byte,
-          1
-      ) != HAL_OK)
-  {
-      Error_Handler();
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* AHT10                                                                 */
-  /* ---------------------------------------------------------------------- */
-
-  AHT10_Init(&hi2c1);
-
-  /* ---------------------------------------------------------------------- */
-  /* LVGL                                                                  */
-  /* ---------------------------------------------------------------------- */
-
-  lv_init();
-
-  /* ---------------------------------------------------------------------- */
-  /* LCD                                                                    */
-  /* ---------------------------------------------------------------------- */
-
-  lv_port_disp_init();
-
-  /* ---------------------------------------------------------------------- */
-  /* XPT2046                                                                 */
-  /* ---------------------------------------------------------------------- */
-
-  XPT2046_Init(
-      &hspi1,
-      TCS_GPIO_Port,
-      TCS_Pin
-  );
-
-  XPT2046_LVGL_Init();
-
-  /* ---------------------------------------------------------------------- */
-  /* EEZ Studio UI                                                          */
-  /* ---------------------------------------------------------------------- */
-
-  ui_init();
-
-  PersianText_Init();
-
-  MessageBox_Init();
-
-  Animation_Init();
-
-  /* ---------------------------------------------------------------------- */
-  /* Temp Page                                                              */
-  /* ---------------------------------------------------------------------- */
-
-  TempPage_Init();
+  Application_Init();
 
   /* USER CODE END 2 */
 
@@ -236,140 +126,7 @@ int main(void)
 
   while (1)
   {
-    /* ------------------------------------------------------------------ */
-    /* UART                                                               */
-    /* ------------------------------------------------------------------ */
-
-    if (uart_packet_ready)
-    {
-        /* -------------------------------------------------------------- */
-        /* Check packet                                                    */
-        /* -------------------------------------------------------------- */
-
-        if (UART_ParsePacket(
-                uart_rx_buffer,
-                &uart_voltage,
-                &uart_current
-            ))
-        {
-            /* ---------------------------------------------------------- */
-            /* Valid packet received                                     */
-            /* ---------------------------------------------------------- */
-
-            uart_last_valid_packet_time = HAL_GetTick();
-
-            uart_link_active = 1;
-
-            /* ---------------------------------------------------------- */
-            /* Information Indicator                                     */
-            /* ---------------------------------------------------------- */
-
-            if (objects.information_indicator != NULL)
-            {
-                lv_label_set_text(
-                    objects.information_indicator,
-                    "در حال دریافت اطلاعات"
-                );
-
-                lv_obj_set_style_text_font(
-                    objects.information_indicator,
-                    &font_persian_14,
-                    LV_PART_MAIN | LV_STATE_DEFAULT
-                );
-
-                lv_obj_set_style_base_dir(
-                    objects.information_indicator,
-                    LV_BASE_DIR_RTL,
-                    LV_PART_MAIN | LV_STATE_DEFAULT
-                );
-
-                lv_obj_set_pos(
-                    objects.information_indicator,
-                    40,
-                    5
-                );
-
-                lv_obj_clear_flag(
-                    objects.information_indicator,
-                    LV_OBJ_FLAG_HIDDEN
-                );
-            }
-
-            /* ---------------------------------------------------------- */
-            /* Data transfer animation                                    */
-            /* ---------------------------------------------------------- */
-
-            if (objects.main != NULL)
-            {
-                data_transfer_animation_start(
-                    objects.main
-                );
-            }
-        }
-
-        /* -------------------------------------------------------------- */
-        /* Packet processed                                               */
-        /* -------------------------------------------------------------- */
-
-        uart_packet_ready = 0;
-    }
-
-    /* ------------------------------------------------------------------ */
-    /* UART TIMEOUT                                                       */
-    /* ------------------------------------------------------------------ */
-
-    if (uart_link_active)
-    {
-        if (
-            (HAL_GetTick() - uart_last_valid_packet_time)
-            >= UART_TIMEOUT_MS
-        )
-        {
-            uart_link_active = 0;
-
-            /* ---------------------------------------------------------- */
-            /* Hide information indicator                                 */
-            /* ---------------------------------------------------------- */
-
-            if (objects.information_indicator != NULL)
-            {
-                lv_obj_add_flag(
-                    objects.information_indicator,
-                    LV_OBJ_FLAG_HIDDEN
-                );
-            }
-
-            /* ---------------------------------------------------------- */
-            /* Stop data transfer animation                               */
-            /* ---------------------------------------------------------- */
-
-            data_transfer_animation_stop();
-        }
-    }
-
-    /* ------------------------------------------------------------------ */
-    /* AHT10                                                              */
-    /* ------------------------------------------------------------------ */
-
-    AHT10_Task();
-
-    /* ------------------------------------------------------------------ */
-    /* EEZ generated screen tick                                          */
-    /* ------------------------------------------------------------------ */
-
-    ui_tick();
-
-    /* ------------------------------------------------------------------ */
-    /* LVGL                                                               */
-    /* ------------------------------------------------------------------ */
-
-    lv_timer_handler();
-
-    /* ------------------------------------------------------------------ */
-    /* Small delay                                                        */
-    /* ------------------------------------------------------------------ */
-
-    HAL_Delay(LVGL_TASK_PERIOD_MS);
+    Application_Run();
 
     /* USER CODE END WHILE */
 
@@ -417,7 +174,11 @@ void SystemClock_Config(void)
 
   RCC_OscInitStruct.PLL.PLLQ = 4;
 
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  if (
+      HAL_RCC_OscConfig(
+          &RCC_OscInitStruct
+      ) != HAL_OK
+  )
   {
     Error_Handler();
   }
@@ -443,10 +204,12 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB2CLKDivider =
       RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(
+  if (
+      HAL_RCC_ClockConfig(
           &RCC_ClkInitStruct,
           FLASH_LATENCY_5
-      ) != HAL_OK)
+      ) != HAL_OK
+  )
   {
     Error_Handler();
   }
@@ -467,14 +230,17 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
 
-  hi2c1.Instance = I2C1;
+  hi2c1.Instance =
+      I2C1;
 
-  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.ClockSpeed =
+      100000;
 
   hi2c1.Init.DutyCycle =
       I2C_DUTYCYCLE_2;
 
-  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.OwnAddress1 =
+      0;
 
   hi2c1.Init.AddressingMode =
       I2C_ADDRESSINGMODE_7BIT;
@@ -482,7 +248,8 @@ static void MX_I2C1_Init(void)
   hi2c1.Init.DualAddressMode =
       I2C_DUALADDRESS_DISABLE;
 
-  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.OwnAddress2 =
+      0;
 
   hi2c1.Init.GeneralCallMode =
       I2C_GENERALCALL_DISABLE;
@@ -490,7 +257,11 @@ static void MX_I2C1_Init(void)
   hi2c1.Init.NoStretchMode =
       I2C_NOSTRETCH_DISABLE;
 
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  if (
+      HAL_I2C_Init(
+          &hi2c1
+      ) != HAL_OK
+  )
   {
     Error_Handler();
   }
@@ -517,7 +288,8 @@ static void MX_SPI1_Init(void)
 
   /* SPI1 parameter configuration*/
 
-  hspi1.Instance = SPI1;
+  hspi1.Instance =
+      SPI1;
 
   hspi1.Init.Mode =
       SPI_MODE_MASTER;
@@ -549,9 +321,14 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CRCCalculation =
       SPI_CRCCALCULATION_DISABLE;
 
-  hspi1.Init.CRCPolynomial = 10;
+  hspi1.Init.CRCPolynomial =
+      10;
 
-  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  if (
+      HAL_SPI_Init(
+          &hspi1
+      ) != HAL_OK
+  )
   {
     Error_Handler();
   }
@@ -576,7 +353,8 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USER CODE BEGIN USART1_Init 1 */
 
-  huart1.Instance = USART1;
+  huart1.Instance =
+      USART1;
 
   huart1.Init.BaudRate =
       115200;
@@ -599,7 +377,11 @@ static void MX_USART1_UART_Init(void)
   huart1.Init.OverSampling =
       UART_OVERSAMPLING_16;
 
-  if (HAL_UART_Init(&huart1) != HAL_OK)
+  if (
+      HAL_UART_Init(
+          &huart1
+      ) != HAL_OK
+  )
   {
     Error_Handler();
   }
@@ -649,13 +431,9 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
 
   __HAL_RCC_GPIOH_CLK_ENABLE();
-
   __HAL_RCC_GPIOA_CLK_ENABLE();
-
   __HAL_RCC_GPIOC_CLK_ENABLE();
-
   __HAL_RCC_GPIOB_CLK_ENABLE();
-
   __HAL_RCC_GPIOE_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
@@ -744,269 +522,6 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
-/* USER CODE BEGIN 4 */
-
-/* ==================================================
-   UART PACKET PARSER
-   ================================================== */
-
-/*
- * Expected packet:
- *
- * 23.47,1.00
- *
- * Data received from STM32F103:
- *
- * 23.47,1.00\r\n
- *
- */
-
-static uint8_t UART_ParsePacket(
-    const char *buffer,
-    float *voltage,
-    float *current
-)
-{
-    char *end_ptr;
-
-    float parsed_voltage;
-    float parsed_current;
-
-    const char *current_start;
-
-    if (buffer == NULL ||
-        voltage == NULL ||
-        current == NULL)
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Parse voltage                                                   */
-    /* -------------------------------------------------------------- */
-
-    parsed_voltage = strtof(
-        buffer,
-        &end_ptr
-    );
-
-    if (end_ptr == buffer)
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Reject NaN                                                      */
-    /* -------------------------------------------------------------- */
-
-    if (parsed_voltage != parsed_voltage)
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Comma                                                           */
-    /* -------------------------------------------------------------- */
-
-    if (*end_ptr != ',')
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Parse current                                                   */
-    /* -------------------------------------------------------------- */
-
-    current_start = end_ptr + 1;
-
-    parsed_current = strtof(
-        current_start,
-        &end_ptr
-    );
-
-    if (end_ptr == current_start)
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Reject NaN                                                      */
-    /* -------------------------------------------------------------- */
-
-    if (parsed_current != parsed_current)
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Allow trailing whitespace                                       */
-    /* -------------------------------------------------------------- */
-
-    while (
-        *end_ptr == ' ' ||
-        *end_ptr == '\t' ||
-        *end_ptr == '\r'
-    )
-    {
-        end_ptr++;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* There must be nothing else                                     */
-    /* -------------------------------------------------------------- */
-
-    if (*end_ptr != '\0')
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Voltage range                                                   */
-    /* -------------------------------------------------------------- */
-
-    if (parsed_voltage < 0.0f ||
-        parsed_voltage > 30.0f)
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Current range                                                   */
-    /* -------------------------------------------------------------- */
-
-    if (parsed_current < 0.0f ||
-        parsed_current > 3.0f)
-    {
-        return 0;
-    }
-
-    /* -------------------------------------------------------------- */
-    /* Valid packet                                                    */
-    /* -------------------------------------------------------------- */
-
-    *voltage = parsed_voltage;
-
-    *current = parsed_current;
-
-    return 1;
-}
-
-
-/* ==================================================
-   UART RX COMPLETE CALLBACK
-   ================================================== */
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART1)
-    {
-        /* ---------------------------------------------------------- */
-        /* End of packet                                              */
-        /* ---------------------------------------------------------- */
-
-        if (uart_rx_byte == '\n')
-        {
-            if (!uart_packet_ready)
-            {
-                if (uart_rx_index <
-                    UART_RX_BUFFER_SIZE)
-                {
-                    uart_rx_buffer[uart_rx_index] =
-                        '\0';
-
-                    uart_packet_ready = 1;
-                }
-                else
-                {
-                    uart_rx_index = 0;
-                }
-            }
-
-            uart_rx_index = 0;
-        }
-
-        /* ---------------------------------------------------------- */
-        /* Ignore CR                                                   */
-        /* ---------------------------------------------------------- */
-
-        else if (uart_rx_byte == '\r')
-        {
-            /* Do nothing */
-        }
-
-        /* ---------------------------------------------------------- */
-        /* Store normal character                                     */
-        /* ---------------------------------------------------------- */
-
-        else
-        {
-            if (!uart_packet_ready)
-            {
-                if (uart_rx_index <
-                    UART_RX_BUFFER_SIZE - 1U)
-                {
-                    uart_rx_buffer[uart_rx_index] =
-                        (char)uart_rx_byte;
-
-                    uart_rx_index++;
-                }
-                else
-                {
-                    /* ------------------------------------------------ */
-                    /* Buffer overflow                                   */
-                    /* ------------------------------------------------ */
-
-                    uart_rx_index = 0;
-                }
-            }
-        }
-
-        /* ---------------------------------------------------------- */
-        /* Receive next byte                                          */
-        /* ---------------------------------------------------------- */
-
-        if (HAL_UART_Receive_IT(
-                &huart1,
-                &uart_rx_byte,
-                1
-            ) != HAL_OK)
-        {
-            Error_Handler();
-        }
-    }
-}
-
-
-/* ==================================================
-   UART ERROR CALLBACK
-   ================================================== */
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == USART1)
-    {
-        /* ---------------------------------------------------------- */
-        /* Reset RX buffer                                            */
-        /* ---------------------------------------------------------- */
-
-        uart_rx_index = 0;
-
-        uart_packet_ready = 0;
-
-        /* ---------------------------------------------------------- */
-        /* Restart reception                                          */
-        /* ---------------------------------------------------------- */
-
-        HAL_UART_Receive_IT(
-            &huart1,
-            &uart_rx_byte,
-            1
-        );
-    }
-}
-
-/* USER CODE END 4 */
-
 /**
   * @brief  This function is executed in case of error occurrence.
   * @retval None
@@ -1035,7 +550,10 @@ void Error_Handler(void)
   * @param  line: assert_param error line source number
   * @retval None
   */
-void assert_failed(uint8_t *file, uint32_t line)
+void assert_failed(
+    uint8_t *file,
+    uint32_t line
+)
 {
   /* USER CODE BEGIN 6 */
 
