@@ -39,6 +39,64 @@ void PersianText_Init(void)
         );
     }
 
+    /* ---------------------------------------------------------------------- */
+    /* temp_button_text                                                      */
+    /* ---------------------------------------------------------------------- */
+
+    if (objects.temp_button_text != NULL)
+    {
+        lv_label_set_text(
+            objects.temp_button_text,
+            "دما سنج"
+        );
+
+        lv_obj_set_style_text_font(
+            objects.temp_button_text,
+            &lv_font_dejavu_16_persian_hebrew,
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+
+        lv_obj_set_style_base_dir(
+            objects.temp_button_text,
+            LV_BASE_DIR_RTL,
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+        lv_obj_set_style_text_color(
+            objects.temp_button_text,
+            lv_color_hex(0x000000),
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* temp_exit_button_text                                                    */
+    /* ---------------------------------------------------------------------- */
+
+    if (objects.temp_exit_button_text != NULL)
+    {
+        lv_label_set_text(
+            objects.temp_exit_button_text,
+            "خروج"
+        );
+
+        lv_obj_set_style_text_font(
+            objects.temp_exit_button_text,
+            &lv_font_dejavu_16_persian_hebrew,
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+
+        lv_obj_set_style_base_dir(
+            objects.temp_exit_button_text,
+            LV_BASE_DIR_RTL,
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+        lv_obj_set_style_text_color(
+            objects.temp_exit_button_text,
+            lv_color_hex(0xffffff),
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+    }
+
 
     /* ---------------------------------------------------------------------- */
     /* Information Indicator                                                  */
@@ -62,12 +120,7 @@ void PersianText_Init(void)
             LV_BASE_DIR_RTL,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
-        lv_obj_set_pos(objects.information_indicator, 140, 1);
-        lv_obj_set_style_text_color(
-            objects.information_indicator,
-            lv_color_hex(0xffffff),
-            LV_PART_MAIN | LV_STATE_DEFAULT
-        );
+        lv_obj_set_pos(objects.information_indicator, 40, 5);
     }
 
     /* ---------------------------------------------------------------------- */
