@@ -18,6 +18,12 @@ objects_t objects;
 
 lv_obj_t *tick_value_change_obj;
 
+static void event_handler_checked_cb_main_msg_hide_switch(lv_event_t *e) {
+    if (lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED)) {
+        action_error_hide(e);
+    }
+}
+
 //
 // Screens
 //
@@ -33,7 +39,7 @@ void create_screen_main() {
             // calibration_button
             lv_obj_t *obj = lv_btn_create(parent_obj);
             objects.calibration_button = obj;
-            lv_obj_set_pos(obj, 110, 161);
+            lv_obj_set_pos(obj, 8, 180);
             lv_obj_set_size(obj, 100, 50);
             lv_obj_add_event_cb(obj, action_calibration, LV_EVENT_RELEASED, (void *)0);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0xf3218b), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -51,12 +57,48 @@ void create_screen_main() {
             }
         }
         {
-            // Persian_text
+            // messageBox
+            lv_obj_t *obj = lv_msgbox_create(parent_obj, "", "", 0, true);
+            objects.message_box = obj;
+            lv_obj_set_pos(obj, 41, 53);
+            lv_obj_set_size(obj, 238, 144);
+            lv_obj_set_style_align(obj, LV_ALIGN_DEFAULT, LV_PART_MAIN | LV_STATE_DEFAULT);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    // message_box_text
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.message_box_text = obj;
+                    lv_obj_set_pos(obj, 180, 18);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_label_set_text_static(obj, "Text");
+                }
+            }
+        }
+        {
+            // information_indicator
             lv_obj_t *obj = lv_label_create(parent_obj);
-            objects.persian_text = obj;
-            lv_obj_set_pos(obj, 136, 84);
+            objects.information_indicator = obj;
+            lv_obj_set_pos(obj, 231, 0);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_label_set_text_static(obj, "");
+            lv_label_set_text_static(obj, "Text");
+        }
+        {
+            // msg_hide_switch
+            lv_obj_t *obj = lv_switch_create(parent_obj);
+            objects.msg_hide_switch = obj;
+            lv_obj_set_pos(obj, 260, 201);
+            lv_obj_set_size(obj, 50, 25);
+            lv_obj_add_event_cb(obj, event_handler_checked_cb_main_msg_hide_switch, LV_EVENT_VALUE_CHANGED, (void *)0);
+            lv_obj_add_event_cb(obj, event_handler_cb_main_msg_hide_switch, LV_EVENT_ALL, 0);
+        }
+        {
+            // Error_hide_text
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            objects.error_hide_text = obj;
+            lv_obj_set_pos(obj, 192, 210);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text_static(obj, "Text");
         }
     }
     

@@ -19,7 +19,11 @@ typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *calibration_button;
     lv_obj_t *calibration_text;
-    lv_obj_t *persian_text;
+    lv_obj_t *message_box;
+    lv_obj_t *message_box_text;
+    lv_obj_t *information_indicator;
+    lv_obj_t *msg_hide_switch;
+    lv_obj_t *error_hide_text;
 } objects_t;
 
 extern objects_t objects;
