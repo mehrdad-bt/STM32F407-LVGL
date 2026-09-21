@@ -8,7 +8,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -20,6 +19,9 @@
 #include "PersianText.h"
 #include "MessageBox.h"
 #include "Animation.h"
+#include "AHT10.h"
+#include "TempPage.h"
+
 
 /* USER CODE END Includes */
 
@@ -41,6 +43,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
 SPI_HandleTypeDef hspi1;
 DMA_HandleTypeDef hdma_spi1_tx;
 
@@ -53,6 +57,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -93,45 +98,62 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_SPI1_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
-    /* ---------------------------------------------------------------------- */
-    /* LVGL                                                                    */
-    /* ---------------------------------------------------------------------- */
 
-    lv_init();
+  /* ---------------------------------------------------------------------- */
+  /* AHT10                                                                 */
+  /* ---------------------------------------------------------------------- */
 
-    /* ---------------------------------------------------------------------- */
-    /* LCD                                                                      */
-    /* ---------------------------------------------------------------------- */
+  AHT10_Init(&hi2c1);
 
-    lv_port_disp_init();
 
-    /* ---------------------------------------------------------------------- */
-    /* XPT2046                                                                  */
-    /* ---------------------------------------------------------------------- */
+  /* ---------------------------------------------------------------------- */
+  /* LVGL                                                                    */
+  /* ---------------------------------------------------------------------- */
 
-    XPT2046_Init(
-        &hspi1,
-        TCS_GPIO_Port,
-        TCS_Pin
-    );
+  lv_init();
 
-    XPT2046_LVGL_Init();
 
-    /* ---------------------------------------------------------------------- */
-    /* EEZ Studio UI                                                           */
-    /* ---------------------------------------------------------------------- */
+  /* ---------------------------------------------------------------------- */
+  /* LCD                                                                      */
+  /* ---------------------------------------------------------------------- */
 
-    ui_init();
-    PersianText_Init();
-    MessageBox_Init();
+  lv_port_disp_init();
 
-    Animation_Init();
-    /*
-     * Force first screen rendering.
-     */
-//    lv_refr_now(NULL);
+
+  /* ---------------------------------------------------------------------- */
+  /* XPT2046                                                                  */
+  /* ---------------------------------------------------------------------- */
+
+  XPT2046_Init(
+      &hspi1,
+      TCS_GPIO_Port,
+      TCS_Pin
+  );
+
+  XPT2046_LVGL_Init();
+
+
+  /* ---------------------------------------------------------------------- */
+  /* EEZ Studio UI                                                           */
+  /* ---------------------------------------------------------------------- */
+
+  ui_init();
+
+  PersianText_Init();
+
+  MessageBox_Init();
+
+  Animation_Init();
+
+
+  /* ---------------------------------------------------------------------- */
+  /* Temp Page                                                               */
+  /* ---------------------------------------------------------------------- */
+
+  TempPage_Init();
 
   /* USER CODE END 2 */
 
@@ -140,30 +162,32 @@ int main(void)
 
     while (1)
     {
-        /*
-         * EEZ generated screen tick.
-         */
-        ui_tick();
+    /* ------------------------------------------------------------------ */
+    /* AHT10                                                              */
+    /* ------------------------------------------------------------------ */
 
-        /*
-         * LVGL:
-         *
-         * - input processing
-         * - timers
-         * - animations
-         * - rendering
-         * - LCD DMA flush
-         */
-        lv_timer_handler();
+    AHT10_Task();
 
-        /*
-         * Small delay.
-         */
 
-        HAL_Delay(
-            LVGL_TASK_PERIOD_MS
-        );
-    }
+    /* ------------------------------------------------------------------ */
+    /* EEZ generated screen tick                                          */
+    /* ------------------------------------------------------------------ */
+
+    ui_tick();
+
+
+    /* ------------------------------------------------------------------ */
+    /* LVGL                                                               */
+    /* ------------------------------------------------------------------ */
+
+    lv_timer_handler();
+
+
+    /* ------------------------------------------------------------------ */
+    /* Small delay                                                        */
+    /* ------------------------------------------------------------------ */
+
+    HAL_Delay(LVGL_TASK_PERIOD_MS);
 
     /* USER CODE END WHILE */
 
@@ -172,6 +196,7 @@ int main(void)
   /* USER CODE END 3 */
 }
 
+}
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -216,6 +241,40 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
 }
 
 /**
