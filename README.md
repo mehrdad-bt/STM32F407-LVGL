@@ -1,1 +1,1 @@
-added back up battery and date and time
+removed back up battery and date and time
