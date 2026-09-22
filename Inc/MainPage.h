@@ -13,5 +13,5 @@ void MainPage_OnUartTimeout(void);
 
 float MainPage_GetVoltage(void);
 float MainPage_GetCurrent(void);
-
+void MainPage_UpdateDateTime(void);
 #endif
