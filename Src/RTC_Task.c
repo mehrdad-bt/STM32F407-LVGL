@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define RTC_BACKUP_MAGIC       0x20260922UL
+#define RTC_BACKUP_MAGIC       0x20260923UL
 #define RTC_UPDATE_PERIOD_MS   1000U
 
 /*
@@ -15,8 +15,8 @@
 #define RTC_DEFAULT_MONTH      RTC_MONTH_SEPTEMBER
 #define RTC_DEFAULT_DATE       22U
 
-#define RTC_DEFAULT_HOUR       9U
-#define RTC_DEFAULT_MINUTE     0U
+#define RTC_DEFAULT_HOUR       11U
+#define RTC_DEFAULT_MINUTE     19U
 #define RTC_DEFAULT_SECOND     0U
 
 extern RTC_HandleTypeDef hrtc;
