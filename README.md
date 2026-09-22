@@ -1,1 +1,1 @@
-added Uart and Command Parsing and Show animation/text when uart connects
+added back up battery and date and time
