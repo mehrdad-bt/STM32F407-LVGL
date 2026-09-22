@@ -400,7 +400,7 @@ void TempPage_Init(void)
     {
         lv_label_set_text(
             objects.humid_text_static,
-            ":رطوبت"
+            "رطوبت:"
         );
 
 
