@@ -6,7 +6,7 @@
 #include "ui/screens.h"
 
 #include "font_persian_14.h"
-
+#include "font_persian_16.h"
 #include "MessageBox.h"
 #include "Animation.h"
 
@@ -90,7 +90,7 @@ void MainPage_Init(void)
 
         lv_obj_set_style_text_font(
             objects.calibration_text,
-            &lv_font_dejavu_16_persian_hebrew,
+            &font_persian_16,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
 
@@ -124,7 +124,7 @@ void MainPage_Init(void)
 
         lv_obj_set_style_text_font(
             objects.temp_button_text,
-            &lv_font_dejavu_16_persian_hebrew,
+            &font_persian_16,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
 

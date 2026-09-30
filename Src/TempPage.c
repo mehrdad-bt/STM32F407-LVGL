@@ -9,7 +9,7 @@
 
 #include "font_persian_24.h"
 #include "font_persian_14.h"
-
+#include "font_persian_16.h"
 #include "Animation.h"
 
 #include <stdio.h>
@@ -435,7 +435,7 @@ void TempPage_Init(void)
 
         lv_obj_set_style_text_font(
             objects.temp_exit_button_text,
-            &lv_font_dejavu_16_persian_hebrew,
+            &font_persian_16,
             LV_PART_MAIN | LV_STATE_DEFAULT
         );
 
