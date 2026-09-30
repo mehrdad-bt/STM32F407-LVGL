@@ -1,10 +1,9 @@
 #include "actions.h"
 
 #include "touchCalibration.h"
-
 #include "MessageBox.h"
-
 #include "TempPage.h"
+#include "OscopePage.h"
 
 #include "lvgl.h"
 
@@ -43,40 +42,19 @@ void action_error_hide(lv_event_t *e)
         return;
     }
 
-
-    lv_obj_t *obj =
-        lv_event_get_target(e);
-
+    lv_obj_t *obj = lv_event_get_target(e);
 
     if (obj == NULL)
     {
         return;
     }
 
-
-    /*
-     * Switch is managed by LVGL itself.
-     *
-     * CHECKED     = ON
-     * NOT CHECKED = OFF
-     */
-
-    if (lv_obj_has_state(
-            obj,
-            LV_STATE_CHECKED))
+    if (lv_obj_has_state(obj, LV_STATE_CHECKED))
     {
-        /*
-         * Switch ON -> hide MessageBox
-         */
-
         MessageBox_SetHidden(true);
     }
     else
     {
-        /*
-         * Switch OFF -> show MessageBox
-         */
-
         MessageBox_SetHidden(false);
     }
 }
@@ -93,23 +71,12 @@ void action_go_to_temp_page(lv_event_t *e)
         return;
     }
 
-
     if (lv_event_get_code(e) != LV_EVENT_RELEASED)
     {
         return;
     }
 
-
-    /*
-     * Load Temp screen
-     */
-
     lv_scr_load(objects.temp);
-
-
-    /*
-     * Immediately refresh values
-     */
 
     TempPage_OnEnter();
 }
@@ -126,18 +93,96 @@ void action_back_to_main(lv_event_t *e)
         return;
     }
 
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
+    {
+        return;
+    }
+
+    lv_scr_load(objects.main);
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Main -> Oscilloscope                                                       */
+/* -------------------------------------------------------------------------- */
+
+void action_go_to_oscope_page(lv_event_t *e)
+{
+    if (e == NULL)
+    {
+        return;
+    }
 
     if (lv_event_get_code(e) != LV_EVENT_RELEASED)
     {
         return;
     }
 
+    lv_scr_load(objects.osilloscop);
 
-    /*
-     * Load Main screen
-     */
+    OscopePage_OnEnter();
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Oscilloscope -> Main                                                       */
+/* -------------------------------------------------------------------------- */
+
+void action_exit_from_oscope_page(lv_event_t *e)
+{
+    if (e == NULL)
+    {
+        return;
+    }
+
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
+    {
+        return;
+    }
+
+    OscopePage_OnExit();
 
     lv_scr_load(objects.main);
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Oscilloscope -> Increase Speed                                             */
+/* -------------------------------------------------------------------------- */
+
+void action_increase_btn(lv_event_t *e)
+{
+    if (e == NULL)
+    {
+        return;
+    }
+
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
+    {
+        return;
+    }
+
+    OscopePage_IncreaseSpeed();
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Oscilloscope -> Decrease Speed                                             */
+/* -------------------------------------------------------------------------- */
+
+void action_decrease_btn(lv_event_t *e)
+{
+    if (e == NULL)
+    {
+        return;
+    }
+
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
+    {
+        return;
+    }
+
+    OscopePage_DecreaseSpeed();
 }
 
 
@@ -152,16 +197,10 @@ void event_handler_cb_main_msg_hide_switch(lv_event_t *e)
         return;
     }
 
-
-    /*
-     * We only care about actual Switch state change.
-     */
-
     if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
     {
         return;
     }
-
 
     action_error_hide(e);
 }

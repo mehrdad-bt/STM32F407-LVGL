@@ -13,14 +13,18 @@ enum ScreensEnum {
     _SCREEN_ID_FIRST = 1,
     SCREEN_ID_MAIN = 1,
     SCREEN_ID_TEMP = 2,
-    _SCREEN_ID_LAST = 2
+    SCREEN_ID_OSILLOSCOP = 3,
+    _SCREEN_ID_LAST = 3
 };
 
 typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *temp;
+    lv_obj_t *osilloscop;
     lv_obj_t *calibration_button;
     lv_obj_t *calibration_text;
+    lv_obj_t *oscope_button_main_page;
+    lv_obj_t *oscope_button_main_page_text;
     lv_obj_t *temp_button;
     lv_obj_t *temp_button_text;
     lv_obj_t *message_box;
@@ -35,6 +39,11 @@ typedef struct _objects_t {
     lv_obj_t *temp_text_dynamic;
     lv_obj_t *humid_text_dynamic;
     lv_obj_t *temp_humid_header_text;
+    lv_obj_t *chart_oscope;
+    lv_obj_t *oscope_page_exit_button;
+    lv_obj_t *oscope_page_exit_button_text;
+    lv_obj_t *decrease_btn_osc_page;
+    lv_obj_t *increase_btn_osc_page;
 } objects_t;
 
 extern objects_t objects;
@@ -44,6 +53,9 @@ void tick_screen_main();
 
 void create_screen_temp();
 void tick_screen_temp();
+
+void create_screen_osilloscop();
+void tick_screen_osilloscop();
 
 void tick_screen_by_id(enum ScreensEnum screenId);
 void tick_screen(int screen_index);

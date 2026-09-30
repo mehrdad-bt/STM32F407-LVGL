@@ -58,6 +58,26 @@ void create_screen_main() {
             }
         }
         {
+            // oscope_button_main_page
+            lv_obj_t *obj = lv_btn_create(parent_obj);
+            objects.oscope_button_main_page = obj;
+            lv_obj_set_pos(obj, 9, 47);
+            lv_obj_set_size(obj, 100, 50);
+            lv_obj_add_event_cb(obj, action_go_to_oscope_page, LV_EVENT_RELEASED, (void *)0);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    // Oscope_button_main_page_text
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.oscope_button_main_page_text = obj;
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text_static(obj, "Button");
+                }
+            }
+        }
+        {
             // temp_button
             lv_obj_t *obj = lv_btn_create(parent_obj);
             objects.temp_button = obj;
@@ -101,10 +121,10 @@ void create_screen_main() {
             // information_indicator
             lv_obj_t *obj = lv_label_create(parent_obj);
             objects.information_indicator = obj;
-            lv_obj_set_pos(obj, 231, 0);
+            lv_obj_set_pos(obj, 40, 3);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_obj_set_style_text_color(obj, lv_color_hex(0xc3c3c3), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text_static(obj, "Text");
-            lv_obj_set_style_text_color(obj, lv_color_hex(0xC3C3C3), LV_PART_MAIN | LV_STATE_DEFAULT);
         }
         {
             // msg_hide_switch
@@ -166,7 +186,7 @@ void create_screen_temp() {
             objects.temp_text_static = obj;
             lv_obj_set_pos(obj, 233, 61);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_obj_set_style_text_color(obj, lv_color_hex(0xF47B7B), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_color(obj, lv_color_hex(0xf47b7b), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text_static(obj, "Text");
         }
         {
@@ -175,7 +195,7 @@ void create_screen_temp() {
             objects.humid_text_static = obj;
             lv_obj_set_pos(obj, 233, 114);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_obj_set_style_text_color(obj, lv_color_hex(0x74D7F9), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_color(obj, lv_color_hex(0x74d7f9), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text_static(obj, "Text");
         }
         {
@@ -200,9 +220,9 @@ void create_screen_temp() {
             // Temp_Humid_Header_Text
             lv_obj_t *obj = lv_label_create(parent_obj);
             objects.temp_humid_header_text = obj;
-            lv_obj_set_pos(obj, 139, 3);
+            lv_obj_set_pos(obj, 139, 13);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_obj_set_style_text_color(obj, lv_color_hex(0xC3C3C3), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_text_color(obj, lv_color_hex(0xc3c3c3), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text_static(obj, "Text");
         }
     }
@@ -213,13 +233,95 @@ void create_screen_temp() {
 void tick_screen_temp() {
 }
 
+void create_screen_osilloscop() {
+    lv_obj_t *obj = lv_obj_create(0);
+    objects.osilloscop = obj;
+    lv_obj_set_pos(obj, 0, 0);
+    lv_obj_set_size(obj, 320, 240);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+    {
+        lv_obj_t *parent_obj = obj;
+        {
+            // chart_oscope
+            lv_obj_t *obj = lv_chart_create(parent_obj);
+            objects.chart_oscope = obj;
+            lv_obj_set_pos(obj, 11, 9);
+            lv_obj_set_size(obj, 299, 164);
+        }
+        {
+            // oscope_page_exit_button
+            lv_obj_t *obj = lv_btn_create(parent_obj);
+            objects.oscope_page_exit_button = obj;
+            lv_obj_set_pos(obj, 11, 198);
+            lv_obj_set_size(obj, 63, 37);
+            lv_obj_add_event_cb(obj, action_exit_from_oscope_page, LV_EVENT_RELEASED, (void *)0);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    // oscope_page_exit_button_text
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.oscope_page_exit_button_text = obj;
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text_static(obj, "Exit");
+                }
+            }
+        }
+        {
+            // decrease_btn_osc_page
+            lv_obj_t *obj = lv_btn_create(parent_obj);
+            objects.decrease_btn_osc_page = obj;
+            lv_obj_set_pos(obj, 160, 200);
+            lv_obj_set_size(obj, 41, 33);
+            lv_obj_add_event_cb(obj, action_decrease_btn, LV_EVENT_RELEASED, (void *)0);
+            lv_obj_set_style_bg_color(obj, lv_color_hex(0xf32121), LV_PART_MAIN | LV_STATE_DEFAULT);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_pos(obj, 0, 0);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text_static(obj, "-");
+                }
+            }
+        }
+        {
+            // increase_btn_osc_page
+            lv_obj_t *obj = lv_btn_create(parent_obj);
+            objects.increase_btn_osc_page = obj;
+            lv_obj_set_pos(obj, 206, 200);
+            lv_obj_set_size(obj, 40, 33);
+            lv_obj_add_event_cb(obj, action_increase_btn, LV_EVENT_RELEASED, (void *)0);
+            lv_obj_set_style_bg_color(obj, lv_color_hex(0xf32121), LV_PART_MAIN | LV_STATE_DEFAULT);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    lv_obj_set_pos(obj, 0, 1);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text_static(obj, "+");
+                }
+            }
+        }
+    }
+    
+    tick_screen_osilloscop();
+}
+
+void tick_screen_osilloscop() {
+}
+
 typedef void (*tick_screen_func_t)();
 tick_screen_func_t tick_screen_funcs[] = {
     tick_screen_main,
     tick_screen_temp,
+    tick_screen_osilloscop,
 };
 void tick_screen(int screen_index) {
-    if (screen_index >= 0 && screen_index < 2) {
+    if (screen_index >= 0 && screen_index < 3) {
         tick_screen_funcs[screen_index]();
     }
 }
@@ -318,4 +420,5 @@ void create_screens() {
     // Create screens
     create_screen_main();
     create_screen_temp();
+    create_screen_osilloscop();
 }
