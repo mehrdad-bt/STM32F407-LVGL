@@ -45,10 +45,17 @@
 
 static const uint32_t time_div_us_table[] =
 {
+    1U,
+    2U,
+    5U,
+    10U,
     20U,
     50U,
     100U,
-    200U
+    200U,
+    500U,
+    1000U,
+    1500U
 };
 
 #define TIME_DIV_COUNT \
@@ -199,7 +206,7 @@ static bool oscope_running = false;
 /*
  * Time/Div index.
  */
-static uint32_t time_div_index = 2U;
+static uint32_t time_div_index = 4U;
 
 
 /*
@@ -463,7 +470,12 @@ static uint32_t get_view_sample_count(void)
 
 
     /*
-     * One DMA block contains 1024 samples.
+     * One oscilloscope block contains OSCOPE_ADC_BLOCK_SIZE samples.
+     *
+     * With the current 500 kS/s ADC capture, the maximum
+     * reliable horizontal window is about 2.048 ms.
+     * Therefore the largest Time/Div option is intentionally
+     * kept at 200 us/div (2 ms total).
      */
     if (
         sample_count >
