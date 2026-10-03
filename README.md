@@ -1,1 +1,1 @@
-Date and Time removed
+Osiloscope added
