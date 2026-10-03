@@ -1,9 +1,5 @@
 #include "OscopePage.h"
 
-#include <stdio.h>
-#include <stdint.h>
-#include <stdbool.h>
-
 #include "lvgl.h"
 
 #include "ui/ui.h"
@@ -11,55 +7,43 @@
 
 #include "OscopeADC.h"
 
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdio.h>
 
-/* ==========================================================
- * General configuration
- * ========================================================== */
 
-#define OSCOPE_ADC_MAX                  4095U
-#define OSCOPE_ADC_REFERENCE            3.3f
+/* ============================================================
+ * DISPLAY
+ * ============================================================ */
 
-#define OSCOPE_HORIZONTAL_DIVS          10U
-#define OSCOPE_VERTICAL_DIVS             8U
-
-#define OSCOPE_MAX_CHART_POINTS        300U
+#define OSCOPE_DISPLAY_FPS             60U
 
 /*
- * Trigger position in the visible waveform.
- *
- * 25% = trigger approximately one quarter
- * from the left side.
+ * 60 FPS is approximately 16.67 ms.
+ * LVGL timer uses integer milliseconds.
  */
-#define OSCOPE_TRIGGER_POSITION         25U
-
-/*
- * Trigger hysteresis.
- */
-#define OSCOPE_TRIGGER_HYSTERESIS      32U
+#define OSCOPE_DISPLAY_PERIOD_MS       16U
 
 
-/* ==========================================================
- * Chart geometry
- *
- * From EEZ screen.c:
- *
- * chart x = 11
- * chart y = 9
- * chart w = 299
- * chart h = 164
- * ========================================================== */
+/* ============================================================
+ * CHART
+ * ============================================================ */
 
-#define OSCOPE_CHART_X                  11
-#define OSCOPE_CHART_Y                   9
-#define OSCOPE_CHART_WIDTH            299
-#define OSCOPE_CHART_HEIGHT           164
+#define OSCOPE_CHART_WIDTH             299U
+#define OSCOPE_CHART_HEIGHT            164U
+
+#define OSCOPE_POINTS                  299U
+
+#define OSCOPE_ADC_MIN                 0U
+#define OSCOPE_ADC_MAX                 4095U
+#define OSCOPE_ADC_CENTER              2048U
 
 
-/* ==========================================================
- * Time / Division
- * ========================================================== */
+/* ============================================================
+ * TIME / DIV
+ * ============================================================ */
 
-static const uint32_t oscope_time_div_us[] =
+static const uint32_t time_div_us_table[] =
 {
     20U,
     50U,
@@ -67,18 +51,16 @@ static const uint32_t oscope_time_div_us[] =
     200U
 };
 
-#define OSCOPE_TIME_DIV_COUNT \
-    (sizeof(oscope_time_div_us) / \
-     sizeof(oscope_time_div_us[0]))
-
-static uint32_t oscope_time_index = 2U;
+#define TIME_DIV_COUNT \
+    (sizeof(time_div_us_table) / \
+     sizeof(time_div_us_table[0]))
 
 
-/* ==========================================================
- * Volt / Division
- * ========================================================== */
+/* ============================================================
+ * VOLT / DIV
+ * ============================================================ */
 
-static const float oscope_volt_div_values[] =
+static const float volt_div_table[] =
 {
     0.1f,
     0.2f,
@@ -87,1500 +69,2285 @@ static const float oscope_volt_div_values[] =
     2.0f
 };
 
-static const char *oscope_volt_div_labels[] =
+#define VOLT_DIV_COUNT \
+    (sizeof(volt_div_table) / \
+     sizeof(volt_div_table[0]))
+
+
+/* ============================================================
+ * SWEEP SPEED
+ * ============================================================ */
+
+/*
+ * Index 0 = slowest
+ * Index 8 = fastest
+ *
+ * 4.0 s
+ * 2.5 s
+ * 1.5 s
+ * 1.0 s
+ * 0.5 s
+ * 0.25 s
+ * 0.125 s
+ * 0.064 s
+ * 0.016 s
+ *
+ * At 16 ms the whole waveform is drawn in one frame,
+ * so the progressive drawing is practically invisible.
+ */
+static const uint32_t sweep_duration_ms_table[] =
 {
-    "0.1V",
-    "0.2V",
-    "0.5V",
-    "1.0V",
-    "2.0V"
+    4000U,
+    2500U,
+    1500U,
+    1000U,
+    500U,
+    250U,
+    125U,
+    64U,
+    16U
 };
 
-#define OSCOPE_VOLT_DIV_COUNT \
-    (sizeof(oscope_volt_div_values) / \
-     sizeof(oscope_volt_div_values[0]))
+#define SWEEP_SPEED_COUNT \
+    (sizeof(sweep_duration_ms_table) / \
+     sizeof(sweep_duration_ms_table[0]))
 
-static uint32_t oscope_volt_index = 2U;
-
-
-/* ==========================================================
- * Trigger
- * ========================================================== */
-
-#define OSCOPE_TRIGGER_MIN             128U
-#define OSCOPE_TRIGGER_MAX            3967U
-#define OSCOPE_TRIGGER_STEP              64U
-
-static uint16_t oscope_trigger_level = 2048U;
+/*
+ * Start from slowest.
+ */
+static uint32_t sweep_speed_index = 0U;
 
 
-/* ==========================================================
- * Run / Stop
- * ========================================================== */
+/* ============================================================
+ * COLORS
+ * ============================================================ */
+
+/*
+ * Waveform = yellow
+ */
+#define OSCOPE_WAVE_COLOR              0xFFFF00U
+
+/*
+ * Trigger = blue
+ */
+#define OSCOPE_TRIGGER_COLOR           0x0000FFU
+
+/*
+ * Information box
+ */
+#define OSCOPE_INFO_BG_COLOR           0x101820U
+#define OSCOPE_INFO_BORDER_COLOR       0x5A6A7AU
+
+/*
+ * Information text
+ */
+#define OSCOPE_TIME_COLOR              0x66E0FFU
+#define OSCOPE_VOLT_COLOR              0xA8FF66U
+#define OSCOPE_TRIGGER_TEXT_COLOR      0x6699FFU
+#define OSCOPE_SWEEP_COLOR             0xFFAA44U
+#define OSCOPE_STATUS_COLOR            0xFFFFFFU
+
+
+/* ============================================================
+ * INFO FONT
+ * ============================================================ */
+
+/*
+ * Use Montserrat 10 when enabled in lv_conf.h.
+ *
+ * If it is disabled, use Montserrat 12, or LVGL default font.
+ *
+ */
+#if LV_FONT_MONTSERRAT_10
+
+#define OSCOPE_INFO_FONT \
+    (&lv_font_montserrat_10)
+
+#elif LV_FONT_MONTSERRAT_12
+
+#define OSCOPE_INFO_FONT \
+    (&lv_font_montserrat_12)
+
+#else
+
+#define OSCOPE_INFO_FONT \
+    LV_FONT_DEFAULT
+
+#endif
+
+
+/* ============================================================
+ * TRIGGER
+ * ============================================================ */
+
+#define TRIGGER_STEP                   64U
+#define TRIGGER_MIN                    128U
+#define TRIGGER_MAX                    3967U
+#define TRIGGER_HYSTERESIS             32U
+#define TRIGGER_PRE_PERCENT            30U
+
+
+/* ============================================================
+ * RUNTIME STATE
+ * ============================================================ */
+
+static bool oscope_active = false;
 
 static bool oscope_running = false;
 
 
-/* ==========================================================
- * Redraw request
- * ========================================================== */
-
-static bool oscope_redraw_requested = false;
-
-
-/* ==========================================================
- * LVGL objects
- * ========================================================== */
-
-static lv_timer_t *oscope_timer = NULL;
-
-static lv_obj_t *oscope_info_label = NULL;
-
-static lv_obj_t *oscope_trigger_line = NULL;
-
-static lv_chart_series_t *oscope_series = NULL;
+/*
+ * Time/Div index.
+ */
+static uint32_t time_div_index = 2U;
 
 
-/* ==========================================================
- * ADC samples
- * ========================================================== */
+/*
+ * Volt/Div index.
+ */
+static uint32_t volt_div_index = 2U;
 
-static uint16_t oscope_samples[
+
+/*
+ * Trigger level.
+ */
+static uint16_t trigger_level =
+    OSCOPE_ADC_CENTER;
+
+
+/* ============================================================
+ * ADC DATA
+ * ============================================================ */
+
+/*
+ * Safe DMA block.
+ */
+static uint16_t latest_block[
     OSCOPE_ADC_BLOCK_SIZE
 ];
 
-static uint16_t oscope_last_count = 0U;
+
+/*
+ * Frozen waveform used for the current visual sweep.
+ */
+static uint16_t sweep_min_values[
+    OSCOPE_POINTS
+];
+
+static uint16_t sweep_max_values[
+    OSCOPE_POINTS
+];
 
 
-/* ==========================================================
- * Chart state
- * ========================================================== */
+/*
+ * Waveform statistics.
+ */
+static uint16_t sweep_global_min = 0U;
 
-static uint16_t last_chart_point_count = 0U;
-
-
-/* ==========================================================
- * Forward declarations
- * ========================================================== */
-
-static void OscopePage_ConfigureChart(void);
-
-static void OscopePage_CreateInfoLabel(void);
-
-static void OscopePage_CreateTriggerLine(void);
-
-static void OscopePage_UpdateTriggerLine(void);
-
-static void OscopePage_UpdateInfoLabel(void);
-
-static void OscopePage_UpdateRunStopButton(void);
-
-static uint16_t OscopePage_GetVisibleSampleCount(void);
-
-static float OscopePage_AdcToVoltage(
-    uint16_t adc
-);
-
-static uint16_t OscopePage_AdcToChart(
-    uint16_t adc
-);
-
-static int OscopePage_FindTrigger(
-    const uint16_t *samples,
-    uint16_t count
-);
-
-static void OscopePage_DrawSamples(
-    const uint16_t *samples,
-    uint16_t count
-);
-
-static void OscopePage_DrawLastSamples(void);
-
-static void OscopePage_TimerCallback(
-    lv_timer_t *timer
-);
+static uint16_t sweep_global_max = 0U;
 
 
-/* ==========================================================
- * ADC -> Voltage
- * ========================================================== */
+/* ============================================================
+ * CHART SERIES
+ * ============================================================ */
 
-static float OscopePage_AdcToVoltage(
-    uint16_t adc
+static lv_chart_series_t *oscope_min_series =
+    NULL;
+
+static lv_chart_series_t *oscope_max_series =
+    NULL;
+
+
+/* ============================================================
+ * CUSTOM UI
+ * ============================================================ */
+
+static lv_obj_t *trigger_line =
+    NULL;
+
+
+/*
+ * Information box inside the chart.
+ */
+static lv_obj_t *oscope_info_box =
+    NULL;
+
+
+/*
+ * Information labels.
+ */
+static lv_obj_t *oscope_time_label =
+    NULL;
+
+static lv_obj_t *oscope_volt_label =
+    NULL;
+
+static lv_obj_t *oscope_trigger_label =
+    NULL;
+
+static lv_obj_t *oscope_sweep_label =
+    NULL;
+
+static lv_obj_t *oscope_status_label =
+    NULL;
+
+
+/* ============================================================
+ * DISPLAY TIMER
+ * ============================================================ */
+
+static lv_timer_t *oscope_display_timer =
+    NULL;
+
+
+/* ============================================================
+ * SWEEP STATE
+ * ============================================================ */
+
+static bool sweep_active =
+    false;
+
+
+static uint32_t sweep_drawn_points =
+    0U;
+
+
+static uint32_t sweep_points_per_frame =
+    1U;
+
+
+static uint32_t sweep_total_frames =
+    1U;
+
+
+static uint32_t sweep_frame_counter =
+    0U;
+
+
+/* ============================================================
+ * SCALE ADC FOR VOLT/DIV
+ * ============================================================ */
+
+static uint16_t scale_adc_for_display(
+    uint16_t adc_value
 )
 {
-    return
-        ((float)adc *
-         OSCOPE_ADC_REFERENCE) /
-        (float)OSCOPE_ADC_MAX;
-}
+    float volt_div;
+    float half_range_v;
+
+    float input_v;
+    float center_v;
+
+    float scaled;
 
 
-/* ==========================================================
- * Time/Div -> source sample count
- * ========================================================== */
-
-static uint16_t OscopePage_GetVisibleSampleCount(void)
-{
-    uint32_t sample_rate;
-    uint32_t total_time_us;
-    uint32_t samples;
+    volt_div =
+        volt_div_table[
+            volt_div_index
+        ];
 
 
-    sample_rate =
-        OscopeADC_GetSampleRate();
+    /*
+     * Four vertical divisions above/below center.
+     */
+    half_range_v =
+        volt_div *
+        4.0f;
 
 
-    total_time_us =
-        oscope_time_div_us[
-            oscope_time_index
-        ] *
-        OSCOPE_HORIZONTAL_DIVS;
-
-
-    samples =
+    /*
+     * ADC -> voltage.
+     */
+    input_v =
         (
-            sample_rate *
-            total_time_us
-        ) /
-        1000000UL;
+            (float)adc_value *
+            3.3f
+        )
+        /
+        4095.0f;
 
 
-    if (samples < 2U)
+    /*
+     * Screen center = 1.65 V.
+     */
+    center_v =
+        1.65f;
+
+
+    /*
+     * Convert into chart coordinate 0..4095.
+     */
+    scaled =
+        (
+            (
+                input_v -
+                center_v
+            )
+            /
+            half_range_v
+        )
+        *
+        2047.5f
+        +
+        2047.5f;
+
+
+    if (
+        scaled <
+        0.0f
+    )
     {
-        samples = 2U;
+        scaled =
+            0.0f;
     }
 
 
     if (
-        samples >
+        scaled >
+        4095.0f
+    )
+    {
+        scaled =
+            4095.0f;
+    }
+
+
+    return
+        (uint16_t)scaled;
+}
+
+
+/* ============================================================
+ * TIME WINDOW
+ * ============================================================ */
+
+static uint32_t get_view_sample_count(void)
+{
+    uint32_t total_time_us;
+
+    uint64_t sample_count;
+
+
+    /*
+     * 10 horizontal divisions.
+     */
+    total_time_us =
+        time_div_us_table[
+            time_div_index
+        ]
+        *
+        10U;
+
+
+    /*
+     * samples = time × sample rate.
+     */
+    sample_count =
+        (
+            (uint64_t)total_time_us *
+            (uint64_t)
+            OscopeADC_GetSampleRate()
+        )
+        /
+        1000000ULL;
+
+
+    if (
+        sample_count <
+        2ULL
+    )
+    {
+        sample_count =
+            2ULL;
+    }
+
+
+    /*
+     * One DMA block contains 1024 samples.
+     */
+    if (
+        sample_count >
         OSCOPE_ADC_BLOCK_SIZE
     )
     {
-        samples =
+        sample_count =
             OSCOPE_ADC_BLOCK_SIZE;
     }
 
 
-    return (uint16_t)samples;
+    return
+        (uint32_t)sample_count;
 }
 
 
-/* ==========================================================
- * ADC -> Chart value
- *
- * Vertical center = 1.65V
- * ========================================================== */
+/* ============================================================
+ * TRIGGER SEARCH
+ * ============================================================ */
 
-static uint16_t OscopePage_AdcToChart(
-    uint16_t adc
+static uint32_t find_trigger_index(
+    const uint16_t *samples,
+    uint32_t sample_count
 )
 {
-    float sample_voltage;
-    float center_voltage;
+    uint32_t i;
 
-    float total_range;
-    float min_voltage;
+    uint16_t level;
 
-    float ratio;
-    float chart_value;
+    uint16_t low_level;
 
 
-    sample_voltage =
-        OscopePage_AdcToVoltage(
-            adc
-        );
-
-
-    center_voltage =
-        OSCOPE_ADC_REFERENCE / 2.0f;
-
-
-    total_range =
-        oscope_volt_div_values[
-            oscope_volt_index
-        ] *
-        (float)OSCOPE_VERTICAL_DIVS;
-
-
-    if (total_range < 0.001f)
-    {
-        total_range =
-            OSCOPE_ADC_REFERENCE;
-    }
-
-
-    min_voltage =
-        center_voltage -
-        (total_range / 2.0f);
-
-
-    ratio =
-        (
-            sample_voltage -
-            min_voltage
-        ) /
-        total_range;
-
-
-    if (ratio <= 0.0f)
+    if (
+        samples == NULL
+    )
     {
         return 0U;
     }
 
 
-    if (ratio >= 1.0f)
-    {
-        return OSCOPE_ADC_MAX;
-    }
-
-
-    chart_value =
-        ratio *
-        (float)OSCOPE_ADC_MAX;
-
-
-    if (chart_value < 0.0f)
-    {
-        chart_value = 0.0f;
-    }
-
-
     if (
-        chart_value >
-        (float)OSCOPE_ADC_MAX
+        sample_count <
+        2U
     )
     {
-        chart_value =
-            (float)OSCOPE_ADC_MAX;
+        return 0U;
     }
 
 
-    return (uint16_t)chart_value;
-}
-
-
-/* ==========================================================
- * Find rising trigger
- * ========================================================== */
-
-static int OscopePage_FindTrigger(
-    const uint16_t *samples,
-    uint16_t count
-)
-{
-    uint16_t i;
-
-    uint16_t low_level;
-    uint16_t high_level;
-
-
-    if (samples == NULL)
-    {
-        return -1;
-    }
-
-
-    if (count < 2U)
-    {
-        return -1;
-    }
+    level =
+        trigger_level;
 
 
     /*
-     * Hysteresis thresholds.
+     * Hysteresis.
      */
     if (
-        oscope_trigger_level >
-        OSCOPE_TRIGGER_HYSTERESIS
+        level >
+        TRIGGER_HYSTERESIS
     )
     {
         low_level =
-            oscope_trigger_level -
-            OSCOPE_TRIGGER_HYSTERESIS;
+            level -
+            TRIGGER_HYSTERESIS;
     }
     else
     {
-        low_level = 0U;
-    }
-
-
-    if (
-        oscope_trigger_level <
-        (
-            OSCOPE_ADC_MAX -
-            OSCOPE_TRIGGER_HYSTERESIS
-        )
-    )
-    {
-        high_level =
-            oscope_trigger_level +
-            OSCOPE_TRIGGER_HYSTERESIS;
-    }
-    else
-    {
-        high_level =
-            OSCOPE_ADC_MAX;
+        low_level =
+            0U;
     }
 
 
     /*
-     * Rising edge.
+     * Rising edge trigger.
      */
     for (
         i = 1U;
-        i < count;
+        i < sample_count;
         i++
     )
     {
         if (
-            samples[i - 1U] <= low_level &&
-            samples[i] >= high_level
+            samples[i - 1U] <=
+            low_level
+            &&
+            samples[i] >=
+            level
         )
         {
-            return (int)i;
+            return i;
         }
     }
 
 
-    return -1;
+    /*
+     * No trigger found.
+     */
+    return
+        sample_count / 2U;
 }
 
 
-/* ==========================================================
- * Configure chart
- * ========================================================== */
+/* ============================================================
+ * CHART CONFIGURATION
+ * ============================================================ */
 
-static void OscopePage_ConfigureChart(void)
+static void configure_chart(void)
 {
-    if (objects.chart_oscope == NULL)
+    if (
+        objects.chart_oscope == NULL
+    )
     {
         return;
     }
 
 
+    /*
+     * Line chart.
+     */
     lv_chart_set_type(
         objects.chart_oscope,
         LV_CHART_TYPE_LINE
     );
 
 
+    /*
+     * One point per horizontal pixel.
+     */
+    lv_chart_set_point_count(
+        objects.chart_oscope,
+        OSCOPE_POINTS
+    );
+
+
+    /*
+     * Internal range.
+     */
     lv_chart_set_range(
         objects.chart_oscope,
         LV_CHART_AXIS_PRIMARY_Y,
-        0,
+        OSCOPE_ADC_MIN,
         OSCOPE_ADC_MAX
     );
 
 
-    lv_chart_set_update_mode(
-        objects.chart_oscope,
-        LV_CHART_UPDATE_MODE_SHIFT
-    );
-
-
     /*
-     * Remove point markers.
+     * Create the two envelope series only once.
      */
-    lv_obj_set_style_size(
-        objects.chart_oscope,
-        0,
-        LV_PART_INDICATOR
-    );
-
-
-    /*
-     * Waveform line width.
-     */
-    lv_obj_set_style_line_width(
-        objects.chart_oscope,
-        2,
-        LV_PART_ITEMS
-    );
-
-
-    if (oscope_series == NULL)
+    if (
+        oscope_min_series == NULL
+    )
     {
-        oscope_series =
+        oscope_min_series =
             lv_chart_add_series(
                 objects.chart_oscope,
-                lv_palette_main(
-                    LV_PALETTE_RED
+                lv_color_hex(
+                    OSCOPE_WAVE_COLOR
                 ),
                 LV_CHART_AXIS_PRIMARY_Y
             );
     }
+
+
+    if (
+        oscope_max_series == NULL
+    )
+    {
+        oscope_max_series =
+            lv_chart_add_series(
+                objects.chart_oscope,
+                lv_color_hex(
+                    OSCOPE_WAVE_COLOR
+                ),
+                LV_CHART_AXIS_PRIMARY_Y
+            );
+    }
+
+
+    /*
+     * We manually update point arrays.
+     */
+    lv_chart_set_update_mode(
+        objects.chart_oscope,
+        LV_CHART_UPDATE_MODE_SHIFT
+    );
 }
 
 
-/* ==========================================================
- * Create information label
- * ========================================================== */
+/* ============================================================
+ * CLEAR CHART
+ * ============================================================ */
 
-static void OscopePage_CreateInfoLabel(void)
+static void clear_chart(void)
 {
-    if (oscope_info_label != NULL)
+    uint32_t i;
+
+
+    if (
+        oscope_min_series != NULL
+    )
+    {
+        for (
+            i = 0U;
+            i < OSCOPE_POINTS;
+            i++
+        )
+        {
+            oscope_min_series
+                ->y_points[i] =
+                LV_CHART_POINT_NONE;
+        }
+    }
+
+
+    if (
+        oscope_max_series != NULL
+    )
+    {
+        for (
+            i = 0U;
+            i < OSCOPE_POINTS;
+            i++
+        )
+        {
+            oscope_max_series
+                ->y_points[i] =
+                LV_CHART_POINT_NONE;
+        }
+    }
+
+
+    if (
+        objects.chart_oscope != NULL
+    )
+    {
+        lv_chart_refresh(
+            objects.chart_oscope
+        );
+    }
+}
+
+
+/* ============================================================
+ * TRIGGER LINE
+ * ============================================================ */
+
+static void create_trigger_line(void)
+{
+    if (
+        objects.osilloscop == NULL
+    )
     {
         return;
     }
 
 
-    if (objects.osilloscop == NULL)
+    if (
+        trigger_line != NULL
+    )
     {
         return;
     }
 
 
-    oscope_info_label =
-        lv_label_create(
+    trigger_line =
+        lv_obj_create(
             objects.osilloscop
         );
 
 
-    if (oscope_info_label == NULL)
-    {
-        return;
-    }
-
-
-    lv_obj_set_pos(
-        oscope_info_label,
-        16,
-        12
-    );
-
-
-    lv_obj_set_size(
-        oscope_info_label,
-        285,
-        LV_SIZE_CONTENT
-    );
-
-
-    lv_obj_set_style_text_color(
-        oscope_info_label,
-        lv_color_white(),
-        LV_PART_MAIN |
-        LV_STATE_DEFAULT
-    );
-
-
-    lv_obj_set_style_text_font(
-        oscope_info_label,
-        &lv_font_montserrat_12,
-        LV_PART_MAIN |
-        LV_STATE_DEFAULT
-    );
-
-
-    lv_label_set_text(
-        oscope_info_label,
-        "ADC:---- MIN:---- MAX:----"
-    );
-}
-
-
-/* ==========================================================
- * Create Trigger line
- * ========================================================== */
-
-static void OscopePage_CreateTriggerLine(void)
-{
-    static lv_point_t points[2];
-
-
-    if (oscope_trigger_line != NULL)
-    {
-        return;
-    }
-
-
-    if (objects.osilloscop == NULL)
+    if (
+        trigger_line == NULL
+    )
     {
         return;
     }
 
 
     /*
-     * Create a line as a sibling of the chart.
-     *
-     * It will sit exactly over the chart area.
+     * Full chart width.
      */
-    oscope_trigger_line =
-        lv_line_create(
-            objects.osilloscop
-        );
-
-
-    if (oscope_trigger_line == NULL)
-    {
-        return;
-    }
-
-
-    points[0].x = 0;
-    points[0].y = 0;
-
-    points[1].x =
-        OSCOPE_CHART_WIDTH - 1;
-
-    points[1].y = 0;
-
-
-    lv_line_set_points(
-        oscope_trigger_line,
-        points,
+    lv_obj_set_size(
+        trigger_line,
+        OSCOPE_CHART_WIDTH,
         2
     );
 
 
     /*
-     * Trigger line style.
+     * Same origin as chart.
      */
-    lv_obj_set_style_line_width(
-        oscope_trigger_line,
-        1,
-        LV_PART_MAIN |
-        LV_STATE_DEFAULT
+    lv_obj_set_pos(
+        trigger_line,
+        11,
+        9
     );
 
 
-    lv_obj_set_style_line_color(
-        oscope_trigger_line,
-        lv_palette_main(
-            LV_PALETTE_YELLOW
+    /*
+     * BLUE trigger.
+     */
+    lv_obj_set_style_bg_color(
+        trigger_line,
+        lv_color_hex(
+            OSCOPE_TRIGGER_COLOR
         ),
         LV_PART_MAIN |
         LV_STATE_DEFAULT
     );
 
 
-    lv_obj_set_style_line_opa(
-        oscope_trigger_line,
-        LV_OPA_80,
+    lv_obj_set_style_bg_opa(
+        trigger_line,
+        LV_OPA_COVER,
         LV_PART_MAIN |
         LV_STATE_DEFAULT
     );
 
 
-    /*
-     * Exact chart position.
-     */
-    lv_obj_set_pos(
-        oscope_trigger_line,
-        OSCOPE_CHART_X,
-        OSCOPE_CHART_Y
+    lv_obj_set_style_border_width(
+        trigger_line,
+        0,
+        LV_PART_MAIN |
+        LV_STATE_DEFAULT
     );
 
 
-    lv_obj_set_size(
-        oscope_trigger_line,
-        OSCOPE_CHART_WIDTH,
-        OSCOPE_CHART_HEIGHT
+    lv_obj_set_style_radius(
+        trigger_line,
+        0,
+        LV_PART_MAIN |
+        LV_STATE_DEFAULT
     );
 
 
-    OscopePage_UpdateTriggerLine();
+    lv_obj_clear_flag(
+        trigger_line,
+        LV_OBJ_FLAG_SCROLLABLE
+    );
+
+
+    lv_obj_clear_flag(
+        trigger_line,
+        LV_OBJ_FLAG_CLICKABLE
+    );
 }
 
 
-/* ==========================================================
- * Update Trigger line position
- * ========================================================== */
+/* ============================================================
+ * UPDATE TRIGGER LINE
+ * ============================================================ */
 
-static void OscopePage_UpdateTriggerLine(void)
+static void update_trigger_line(void)
 {
-    static lv_point_t points[2];
+    uint16_t scaled_adc;
 
-    uint16_t chart_value;
-
-    int32_t y;
+    uint32_t y;
 
 
-    if (oscope_trigger_line == NULL)
+    if (
+        trigger_line == NULL
+    )
     {
         return;
     }
 
 
     /*
-     * Use exactly the same vertical scaling
-     * as waveform.
+     * Trigger must follow Volt/Div.
      */
-    chart_value =
-        OscopePage_AdcToChart(
-            oscope_trigger_level
+    scaled_adc =
+        scale_adc_for_display(
+            trigger_level
         );
 
 
-    /*
-     * LVGL chart:
-     *
-     * maximum value = top
-     * minimum value = bottom
-     */
     y =
         (
-            (int32_t)(OSCOPE_ADC_MAX -
-                      chart_value) *
-            (OSCOPE_CHART_HEIGHT - 1)
-        ) /
+            (uint32_t)scaled_adc *
+            (OSCOPE_CHART_HEIGHT - 1U)
+        )
+        /
         OSCOPE_ADC_MAX;
 
 
-    if (y < 0)
-    {
-        y = 0;
-    }
-
-
     if (
-        y >
-        (OSCOPE_CHART_HEIGHT - 1)
+        y >=
+        OSCOPE_CHART_HEIGHT
     )
     {
         y =
-            OSCOPE_CHART_HEIGHT - 1;
+            OSCOPE_CHART_HEIGHT - 1U;
     }
 
 
-    points[0].x = 0;
-    points[0].y = (lv_coord_t)y;
-
-    points[1].x =
-        OSCOPE_CHART_WIDTH - 1;
-
-    points[1].y = (lv_coord_t)y;
-
-
-    lv_line_set_points(
-        oscope_trigger_line,
-        points,
-        2
-    );
-
-
-    lv_obj_invalidate(
-        oscope_trigger_line
-    );
-}
-
-
-/* ==========================================================
- * Update info label
- * ========================================================== */
-
-static void OscopePage_UpdateInfoLabel(void)
-{
-    uint16_t latest;
-    uint16_t min_value;
-    uint16_t max_value;
-
-    uint16_t i;
-
-    uint32_t trigger_millivolts;
-
-    uint32_t sample_rate;
-
-    uint16_t visible_samples;
-
-    uint32_t visible_time_us;
-
-    char text[160];
-
-    const char *run_text;
-
-
-    if (oscope_info_label == NULL)
-    {
-        return;
-    }
-
-
-    latest = 0U;
-
-    min_value =
-        OSCOPE_ADC_MAX;
-
-    max_value = 0U;
-
-
-    if (oscope_last_count > 0U)
-    {
-        latest =
-            oscope_samples[
-                oscope_last_count - 1U
-            ];
-
-
-        for (
-            i = 0U;
-            i < oscope_last_count;
-            i++
+    /*
+     * Convert to screen Y.
+     */
+    y =
+        (
+            OSCOPE_CHART_HEIGHT - 1U
         )
-        {
-            if (
-                oscope_samples[i] <
-                min_value
-            )
-            {
-                min_value =
-                    oscope_samples[i];
-            }
+        -
+        y;
 
 
-            if (
-                oscope_samples[i] >
-                max_value
-            )
-            {
-                max_value =
-                    oscope_samples[i];
-            }
-        }
-    }
-    else
-    {
-        min_value = 0U;
-        max_value = 0U;
-    }
-
-
-    trigger_millivolts =
-        (
-            (uint32_t)
-            oscope_trigger_level *
-            3300UL
-        ) /
-        OSCOPE_ADC_MAX;
-
-
-    sample_rate =
-        OscopeADC_GetSampleRate();
-
-
-    visible_samples =
-        OscopePage_GetVisibleSampleCount();
-
-
-    if (sample_rate > 0U)
-    {
-        visible_time_us =
-            (
-                (uint32_t)
-                visible_samples *
-                1000000UL
-            ) /
-            sample_rate;
-    }
-    else
-    {
-        visible_time_us = 0U;
-    }
-
-
-    if (oscope_running)
-    {
-        run_text = "RUN";
-    }
-    else
-    {
-        run_text = "STOP";
-    }
-
-
-    snprintf(
-        text,
-        sizeof(text),
-
-        "ADC:%4u MIN:%4u MAX:%4u\n"
-        "T:%luus V:%s TR:%lumV %s\n"
-        "%luS/s %luus",
-
-        latest,
-        min_value,
-        max_value,
-
-        (unsigned long)
-        oscope_time_div_us[
-            oscope_time_index
-        ],
-
-        oscope_volt_div_labels[
-            oscope_volt_index
-        ],
-
-        (unsigned long)
-        trigger_millivolts,
-
-        run_text,
-
-        (unsigned long)
-        sample_rate,
-
-        (unsigned long)
-        visible_time_us
-    );
-
-
-    lv_label_set_text(
-        oscope_info_label,
-        text
+    lv_obj_set_y(
+        trigger_line,
+        9 +
+        (lv_coord_t)y
     );
 }
 
 
-/* ==========================================================
- * Update RUN / STOP button
- * ========================================================== */
+/* ============================================================
+ * CREATE INFO BOX
+ * ============================================================ */
 
-static void OscopePage_UpdateRunStopButton(void)
+static void create_info_box(void)
 {
-    lv_obj_t *label;
-
-
-    if (objects.stop_run_btn == NULL)
+    if (
+        objects.osilloscop == NULL
+    )
     {
         return;
     }
 
 
-    label =
-        lv_obj_get_child(
-            objects.stop_run_btn,
-            0
-        );
+    /* --------------------------------------------------------
+     * Information box
+     * -------------------------------------------------------- */
 
-
-    if (label == NULL)
+    if (
+        oscope_info_box == NULL
+    )
     {
-        return;
-    }
-
-
-    if (oscope_running)
-    {
-        lv_label_set_text(
-            label,
-            "STOP"
-        );
-    }
-    else
-    {
-        lv_label_set_text(
-            label,
-            "RUN"
-        );
-    }
-}
-
-
-/* ==========================================================
- * Draw waveform
- * ========================================================== */
-
-static void OscopePage_DrawSamples(
-    const uint16_t *samples,
-    uint16_t count
-)
-{
-    uint16_t visible_count;
-    uint16_t display_count;
-
-    uint16_t display_index;
-    uint16_t source_index;
-
-    uint16_t chart_value;
-
-    int trigger_index;
-
-    int start_index;
-
-    int maximum_start;
-
-    int pretrigger_samples;
-
-    uint32_t source_offset;
-
-
-    if (samples == NULL)
-    {
-        return;
-    }
-
-
-    if (count == 0U)
-    {
-        return;
-    }
-
-
-    if (objects.chart_oscope == NULL)
-    {
-        return;
-    }
-
-
-    if (oscope_series == NULL)
-    {
-        OscopePage_ConfigureChart();
-    }
-
-
-    if (oscope_series == NULL)
-    {
-        return;
-    }
-
-
-    /*
-     * Exact number of ADC samples corresponding
-     * to selected Time/Div.
-     */
-    visible_count =
-        OscopePage_GetVisibleSampleCount();
-
-
-    if (visible_count > count)
-    {
-        visible_count =
-            count;
-    }
-
-
-    if (visible_count < 2U)
-    {
-        visible_count = 2U;
-    }
-
-
-    /*
-     * Trigger.
-     */
-    trigger_index =
-        OscopePage_FindTrigger(
-            samples,
-            count
-        );
-
-
-    pretrigger_samples =
-        (
-            (int)visible_count *
-            OSCOPE_TRIGGER_POSITION
-        ) / 100;
-
-
-    maximum_start =
-        (int)count -
-        (int)visible_count;
-
-
-    if (maximum_start < 0)
-    {
-        maximum_start = 0;
-    }
-
-
-    /*
-     * Default to latest window.
-     */
-    start_index =
-        maximum_start;
-
-
-    /*
-     * If trigger exists, center the visible window
-     * around the trigger position.
-     */
-    if (trigger_index >= 0)
-    {
-        start_index =
-            trigger_index -
-            pretrigger_samples;
-
-
-        if (start_index < 0)
-        {
-            start_index = 0;
-        }
+        oscope_info_box =
+            lv_obj_create(
+                objects.osilloscop
+            );
 
 
         if (
-            start_index >
-            maximum_start
+            oscope_info_box == NULL
         )
         {
-            start_index =
-                maximum_start;
+            return;
         }
-    }
-
-
-    /*
-     * Do not create more points than
-     * necessary for the display.
-     */
-    display_count =
-        visible_count;
-
-
-    if (
-        display_count >
-        OSCOPE_MAX_CHART_POINTS
-    )
-    {
-        display_count =
-            OSCOPE_MAX_CHART_POINTS;
-    }
-
-
-    /*
-     * Change point count only when necessary.
-     */
-    if (
-        last_chart_point_count !=
-        display_count
-    )
-    {
-        lv_chart_set_point_count(
-            objects.chart_oscope,
-            display_count
-        );
-
-
-        last_chart_point_count =
-            display_count;
-    }
-
-
-    /*
-     * Clear previous waveform.
-     */
-    lv_chart_set_all_value(
-        objects.chart_oscope,
-        oscope_series,
-        0
-    );
-
-
-    /*
-     * Draw.
-     */
-    for (
-        display_index = 0U;
-        display_index < display_count;
-        display_index++
-    )
-    {
-        if (display_count <= 1U)
-        {
-            source_offset = 0U;
-        }
-        else
-        {
-            source_offset =
-                (
-                    (uint32_t)
-                    display_index *
-                    (uint32_t)
-                    (visible_count - 1U)
-                ) /
-                (uint32_t)
-                (display_count - 1U);
-        }
-
-
-        source_index =
-            (uint16_t)(
-                start_index +
-                (int)source_offset
-            );
-
-
-        if (source_index >= count)
-        {
-            source_index =
-                count - 1U;
-        }
-
-
-        chart_value =
-            OscopePage_AdcToChart(
-                samples[source_index]
-            );
 
 
         /*
-         * Known-good LVGL function.
+         * Box is placed inside chart,
+         * upper-right corner.
          */
-        lv_chart_set_next_value(
-            objects.chart_oscope,
-            oscope_series,
-            (lv_coord_t)chart_value
+        lv_obj_set_pos(
+            oscope_info_box,
+            178,
+            14
+        );
+
+
+        lv_obj_set_size(
+            oscope_info_box,
+            124,
+            48
+        );
+
+
+        /*
+         * Dark background.
+         */
+        lv_obj_set_style_bg_color(
+            oscope_info_box,
+            lv_color_hex(
+                OSCOPE_INFO_BG_COLOR
+            ),
+            LV_PART_MAIN |
+            LV_STATE_DEFAULT
+        );
+
+
+        lv_obj_set_style_bg_opa(
+            oscope_info_box,
+            LV_OPA_80,
+            LV_PART_MAIN |
+            LV_STATE_DEFAULT
+        );
+
+
+        /*
+         * Border.
+         */
+        lv_obj_set_style_border_color(
+            oscope_info_box,
+            lv_color_hex(
+                OSCOPE_INFO_BORDER_COLOR
+            ),
+            LV_PART_MAIN |
+            LV_STATE_DEFAULT
+        );
+
+
+        lv_obj_set_style_border_width(
+            oscope_info_box,
+            1,
+            LV_PART_MAIN |
+            LV_STATE_DEFAULT
+        );
+
+
+        lv_obj_set_style_radius(
+            oscope_info_box,
+            3,
+            LV_PART_MAIN |
+            LV_STATE_DEFAULT
+        );
+
+
+        /*
+         * Do not scroll.
+         */
+        lv_obj_clear_flag(
+            oscope_info_box,
+            LV_OBJ_FLAG_SCROLLABLE
+        );
+
+
+        lv_obj_clear_flag(
+            oscope_info_box,
+            LV_OBJ_FLAG_CLICKABLE
         );
     }
 
 
+    /* --------------------------------------------------------
+     * TIME
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_time_label == NULL
+    )
+    {
+        oscope_time_label =
+            lv_label_create(
+                oscope_info_box
+            );
+
+
+        if (
+            oscope_time_label != NULL
+        )
+        {
+            lv_obj_set_pos(
+                oscope_time_label,
+                3,
+                0
+            );
+
+
+            lv_obj_set_size(
+                oscope_time_label,
+                58,
+                12
+            );
+
+
+            lv_obj_set_style_text_font(
+                oscope_time_label,
+                OSCOPE_INFO_FONT,
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_obj_set_style_text_color(
+                oscope_time_label,
+                lv_color_hex(
+                    OSCOPE_TIME_COLOR
+                ),
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_label_set_text(
+                oscope_time_label,
+                "TIME"
+            );
+        }
+    }
+
+
+    /* --------------------------------------------------------
+     * VOLT
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_volt_label == NULL
+    )
+    {
+        oscope_volt_label =
+            lv_label_create(
+                oscope_info_box
+            );
+
+
+        if (
+            oscope_volt_label != NULL
+        )
+        {
+            lv_obj_set_pos(
+                oscope_volt_label,
+                63,
+                0
+            );
+
+
+            lv_obj_set_size(
+                oscope_volt_label,
+                61,
+                12
+            );
+
+
+            lv_obj_set_style_text_font(
+                oscope_volt_label,
+                OSCOPE_INFO_FONT,
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_obj_set_style_text_color(
+                oscope_volt_label,
+                lv_color_hex(
+                    OSCOPE_VOLT_COLOR
+                ),
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_label_set_text(
+                oscope_volt_label,
+                "VOLT"
+            );
+        }
+    }
+
+
+    /* --------------------------------------------------------
+     * TRIGGER
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_trigger_label == NULL
+    )
+    {
+        oscope_trigger_label =
+            lv_label_create(
+                oscope_info_box
+            );
+
+
+        if (
+            oscope_trigger_label != NULL
+        )
+        {
+            lv_obj_set_pos(
+                oscope_trigger_label,
+                3,
+                12
+            );
+
+
+            lv_obj_set_size(
+                oscope_trigger_label,
+                58,
+                12
+            );
+
+
+            lv_obj_set_style_text_font(
+                oscope_trigger_label,
+                OSCOPE_INFO_FONT,
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_obj_set_style_text_color(
+                oscope_trigger_label,
+                lv_color_hex(
+                    OSCOPE_TRIGGER_TEXT_COLOR
+                ),
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_label_set_text(
+                oscope_trigger_label,
+                "TRIG"
+            );
+        }
+    }
+
+
+    /* --------------------------------------------------------
+     * SWEEP
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_sweep_label == NULL
+    )
+    {
+        oscope_sweep_label =
+            lv_label_create(
+                oscope_info_box
+            );
+
+
+        if (
+            oscope_sweep_label != NULL
+        )
+        {
+            lv_obj_set_pos(
+                oscope_sweep_label,
+                63,
+                12
+            );
+
+
+            lv_obj_set_size(
+                oscope_sweep_label,
+                58,
+                12
+            );
+
+
+            lv_obj_set_style_text_font(
+                oscope_sweep_label,
+                OSCOPE_INFO_FONT,
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_obj_set_style_text_color(
+                oscope_sweep_label,
+                lv_color_hex(
+                    OSCOPE_SWEEP_COLOR
+                ),
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_label_set_text(
+                oscope_sweep_label,
+                "SW"
+            );
+        }
+    }
+
+
+    /* --------------------------------------------------------
+     * STATUS
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_status_label == NULL
+    )
+    {
+        oscope_status_label =
+            lv_label_create(
+                oscope_info_box
+            );
+
+
+        if (
+            oscope_status_label != NULL
+        )
+        {
+            lv_obj_set_pos(
+                oscope_status_label,
+                3,
+                24
+            );
+
+
+            lv_obj_set_size(
+                oscope_status_label,
+                118,
+                12
+            );
+
+
+            lv_obj_set_style_text_font(
+                oscope_status_label,
+                OSCOPE_INFO_FONT,
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_obj_set_style_text_color(
+                oscope_status_label,
+                lv_color_hex(
+                    OSCOPE_STATUS_COLOR
+                ),
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+
+
+            lv_label_set_text(
+                oscope_status_label,
+                "STOP"
+            );
+        }
+    }
+}
+
+
+/* ============================================================
+ * UPDATE INFO BOX
+ * ============================================================ */
+
+static void update_info_box(void)
+{
+    char text[32];
+
+    uint32_t time_div;
+
+    uint32_t volt_div_x10;
+
+    uint32_t trigger_mv;
+
+    uint32_t sweep_ms;
+
+
+    if (
+        oscope_info_box == NULL
+    )
+    {
+        return;
+    }
+
+
+    time_div =
+        time_div_us_table[
+            time_div_index
+        ];
+
+
+    /*
+     * Store Volt/Div as tenths of a volt.
+     * Avoid %f because newlib-nano in many STM32 builds
+     * is linked without floating-point printf support.
+     */
+    volt_div_x10 =
+        (uint32_t)(
+            volt_div_table[
+                volt_div_index
+            ]
+            *
+            10.0f
+        );
+
+
+    trigger_mv =
+        (
+            (uint32_t)
+            trigger_level
+            *
+            3300U
+        )
+        /
+        4095U;
+
+
+    sweep_ms =
+        sweep_duration_ms_table[
+            sweep_speed_index
+        ];
+
+
+    /* --------------------------------------------------------
+     * TIME
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_time_label != NULL
+    )
+    {
+        snprintf(
+            text,
+            sizeof(text),
+            "T:%luus/d",
+            (unsigned long)time_div
+        );
+
+
+        lv_label_set_text(
+            oscope_time_label,
+            text
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * VOLT
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_volt_label != NULL
+    )
+    {
+        snprintf(
+            text,
+            sizeof(text),
+            "V/d:%lu.%luV",
+            (unsigned long)(volt_div_x10 / 10U),
+            (unsigned long)(volt_div_x10 % 10U)
+        );
+
+
+        lv_label_set_text(
+            oscope_volt_label,
+            text
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * TRIGGER
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_trigger_label != NULL
+    )
+    {
+        snprintf(
+            text,
+            sizeof(text),
+            "TR:%lumV",
+            (unsigned long)trigger_mv
+        );
+
+
+        lv_label_set_text(
+            oscope_trigger_label,
+            text
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * SWEEP
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_sweep_label != NULL
+    )
+    {
+        if (
+            sweep_ms >=
+            1000U
+        )
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "SW:%.1fs",
+                (
+                    (double)sweep_ms
+                    /
+                    1000.0
+                )
+            );
+        }
+        else
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "SW:%lums",
+                (unsigned long)sweep_ms
+            );
+        }
+
+
+        lv_label_set_text(
+            oscope_sweep_label,
+            text
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * STATUS
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_status_label != NULL
+    )
+    {
+        lv_label_set_text(
+            oscope_status_label,
+            oscope_running
+                ? "RUN"
+                : "STOP"
+        );
+
+
+        lv_obj_set_style_text_color(
+            oscope_status_label,
+            oscope_running
+                ? lv_color_hex(0x66FF66)
+                : lv_color_hex(0xFFFFFF),
+            LV_PART_MAIN |
+            LV_STATE_DEFAULT
+        );
+    }
+}
+
+
+/* ============================================================
+ * CONFIGURE SWEEP TIMING
+ * ============================================================ */
+
+static void configure_sweep_timing(void)
+{
+    uint32_t duration_ms;
+
+    uint32_t frames;
+
+
+    /*
+     * Sweep duration is independent from Time/Div.
+     */
+    duration_ms =
+        sweep_duration_ms_table[
+            sweep_speed_index
+        ];
+
+
+    /*
+     * Convert duration to number of display frames.
+     */
+    frames =
+        (
+            duration_ms
+            +
+            OSCOPE_DISPLAY_PERIOD_MS
+            -
+            1U
+        )
+        /
+        OSCOPE_DISPLAY_PERIOD_MS;
+
+
+    if (
+        frames <
+        1U
+    )
+    {
+        frames =
+            1U;
+    }
+
+
+    sweep_total_frames =
+        frames;
+
+
+    /*
+     * Spread 299 points over all frames.
+     */
+    sweep_points_per_frame =
+        (
+            OSCOPE_POINTS
+            +
+            frames
+            -
+            1U
+        )
+        /
+        frames;
+
+
+    if (
+        sweep_points_per_frame <
+        1U
+    )
+    {
+        sweep_points_per_frame =
+            1U;
+    }
+}
+
+
+/* ============================================================
+ * PREPARE NEW SWEEP
+ * ============================================================ */
+
+static bool prepare_new_sweep(void)
+{
+    uint32_t view_sample_count;
+
+    uint32_t trigger_index;
+
+    uint32_t pre_trigger;
+
+    uint32_t start_index;
+
+    uint32_t point;
+
+    uint32_t i;
+
+
+    /*
+     * Get newest safe DMA block.
+     */
+    if (
+        !OscopeADC_GetLatestBlock(
+            latest_block,
+            OSCOPE_ADC_BLOCK_SIZE
+        )
+    )
+    {
+        return false;
+    }
+
+
+    /*
+     * Time/Div -> number of samples.
+     */
+    view_sample_count =
+        get_view_sample_count();
+
+
+    /*
+     * Find trigger.
+     */
+    trigger_index =
+        find_trigger_index(
+            latest_block,
+            OSCOPE_ADC_BLOCK_SIZE
+        );
+
+
+    /*
+     * 30% before trigger.
+     */
+    pre_trigger =
+        (
+            view_sample_count
+            *
+            TRIGGER_PRE_PERCENT
+        )
+        /
+        100U;
+
+
+    if (
+        trigger_index >
+        pre_trigger
+    )
+    {
+        start_index =
+            trigger_index
+            -
+            pre_trigger;
+    }
+    else
+    {
+        start_index =
+            0U;
+    }
+
+
+    /*
+     * Stay inside DMA block.
+     */
+    if (
+        start_index
+        +
+        view_sample_count
+        >
+        OSCOPE_ADC_BLOCK_SIZE
+    )
+    {
+        start_index =
+            OSCOPE_ADC_BLOCK_SIZE
+            -
+            view_sample_count;
+    }
+
+
+    sweep_global_min =
+        4095U;
+
+
+    sweep_global_max =
+        0U;
+
+
+    /* ========================================================
+     * MORE ADC SAMPLES THAN SCREEN POINTS
+     *
+     * Min/Max Envelope
+     * ======================================================== */
+
+    if (
+        view_sample_count >=
+        OSCOPE_POINTS
+    )
+    {
+        for (
+            point = 0U;
+            point < OSCOPE_POINTS;
+            point++
+        )
+        {
+            uint32_t bin_start;
+
+            uint32_t bin_end;
+
+            uint16_t bin_min =
+                4095U;
+
+            uint16_t bin_max =
+                0U;
+
+
+            bin_start =
+                (
+                    point
+                    *
+                    view_sample_count
+                )
+                /
+                OSCOPE_POINTS;
+
+
+            bin_end =
+                (
+                    (point + 1U)
+                    *
+                    view_sample_count
+                )
+                /
+                OSCOPE_POINTS;
+
+
+            if (
+                bin_end <=
+                bin_start
+            )
+            {
+                bin_end =
+                    bin_start + 1U;
+            }
+
+
+            if (
+                bin_end >
+                view_sample_count
+            )
+            {
+                bin_end =
+                    view_sample_count;
+            }
+
+
+            /*
+             * Find minimum and maximum inside bin.
+             */
+            for (
+                i = bin_start;
+                i < bin_end;
+                i++
+            )
+            {
+                uint16_t value =
+                    latest_block[
+                        start_index
+                        +
+                        i
+                    ];
+
+
+                if (
+                    value <
+                    bin_min
+                )
+                {
+                    bin_min =
+                        value;
+                }
+
+
+                if (
+                    value >
+                    bin_max
+                )
+                {
+                    bin_max =
+                        value;
+                }
+            }
+
+
+            /*
+             * Apply Volt/Div scaling.
+             */
+            sweep_min_values[point] =
+                scale_adc_for_display(
+                    bin_min
+                );
+
+
+            sweep_max_values[point] =
+                scale_adc_for_display(
+                    bin_max
+                );
+
+
+            /*
+             * Statistics.
+             */
+            if (
+                bin_min <
+                sweep_global_min
+            )
+            {
+                sweep_global_min =
+                    bin_min;
+            }
+
+
+            if (
+                bin_max >
+                sweep_global_max
+            )
+            {
+                sweep_global_max =
+                    bin_max;
+            }
+        }
+    }
+
+
+    /* ========================================================
+     * FEWER ADC SAMPLES THAN SCREEN POINTS
+     *
+     * Stretch samples.
+     * ======================================================== */
+
+    else
+    {
+        for (
+            point = 0U;
+            point < OSCOPE_POINTS;
+            point++
+        )
+        {
+            uint32_t source_index;
+
+            uint16_t value;
+
+
+            source_index =
+                (
+                    point
+                    *
+                    (
+                        view_sample_count
+                        -
+                        1U
+                    )
+                )
+                /
+                (
+                    OSCOPE_POINTS
+                    -
+                    1U
+                );
+
+
+            value =
+                latest_block[
+                    start_index
+                    +
+                    source_index
+                ];
+
+
+            sweep_min_values[point] =
+                scale_adc_for_display(
+                    value
+                );
+
+
+            sweep_max_values[point] =
+                scale_adc_for_display(
+                    value
+                );
+
+
+            if (
+                value <
+                sweep_global_min
+            )
+            {
+                sweep_global_min =
+                    value;
+            }
+
+
+            if (
+                value >
+                sweep_global_max
+            )
+            {
+                sweep_global_max =
+                    value;
+            }
+        }
+    }
+
+
+    /*
+     * Configure sweep.
+     */
+    configure_sweep_timing();
+
+
+    /*
+     * Reset progressive state.
+     */
+    sweep_drawn_points =
+        0U;
+
+
+    sweep_frame_counter =
+        0U;
+
+
+    sweep_active =
+        true;
+
+
+    /*
+     * Start with an empty chart.
+     */
+    clear_chart();
+
+
+    /*
+     * Update info.
+     */
+    update_info_box();
+
+
+    return true;
+}
+
+
+/* ============================================================
+ * DRAW ONE SWEEP CHUNK
+ * ============================================================ */
+
+static void draw_sweep_chunk(void)
+{
+    uint32_t start_point;
+
+    uint32_t end_point;
+
+    uint32_t point;
+
+
+    if (
+        !sweep_active
+    )
+    {
+        return;
+    }
+
+
+    start_point =
+        sweep_drawn_points;
+
+
+    end_point =
+        start_point
+        +
+        sweep_points_per_frame;
+
+
+    if (
+        end_point >
+        OSCOPE_POINTS
+    )
+    {
+        end_point =
+            OSCOPE_POINTS;
+    }
+
+
+    /*
+     * Draw only this frame's section.
+     */
+    for (
+        point = start_point;
+        point < end_point;
+        point++
+    )
+    {
+        oscope_min_series
+            ->y_points[point] =
+            sweep_min_values[point];
+
+
+        oscope_max_series
+            ->y_points[point] =
+            sweep_max_values[point];
+    }
+
+
+    /*
+     * One chart refresh.
+     */
     lv_chart_refresh(
         objects.chart_oscope
     );
 
 
-    lv_obj_invalidate(
-        objects.chart_oscope
-    );
+    sweep_drawn_points =
+        end_point;
+
+
+    sweep_frame_counter++;
 
 
     /*
-     * Trigger line must remain above the chart.
+     * End of sweep.
      */
-    OscopePage_UpdateTriggerLine();
-}
-
-
-/* ==========================================================
- * Draw latest block
- * ========================================================== */
-
-static void OscopePage_DrawLastSamples(void)
-{
-    if (oscope_last_count == 0U)
+    if (
+        sweep_drawn_points >=
+        OSCOPE_POINTS
+    )
     {
-        return;
+        sweep_active =
+            false;
     }
-
-
-    OscopePage_DrawSamples(
-        oscope_samples,
-        oscope_last_count
-    );
 }
 
 
-/* ==========================================================
- * Timer callback
- * ========================================================== */
+/* ============================================================
+ * DISPLAY TIMER CALLBACK
+ * ============================================================ */
 
-static void OscopePage_TimerCallback(
+static void oscilloscope_display_timer_cb(
     lv_timer_t *timer
 )
 {
-    bool received;
-
-
     (void)timer;
 
 
-    if (!oscope_running)
+    if (
+        !oscope_active
+    )
+    {
+        return;
+    }
+
+
+    if (
+        !oscope_running
+    )
     {
         return;
     }
 
 
     /*
-     * Get newest completed DMA block.
+     * Start a fresh waveform when
+     * the previous sweep is finished.
      */
-    received =
-        OscopeADC_GetLatestBlock(
-            oscope_samples,
-            OSCOPE_ADC_BLOCK_SIZE
-        );
-
-
-    if (received)
+    if (
+        !sweep_active
+    )
     {
-        oscope_last_count =
-            OscopeADC_GetBlockSize();
-
-
-        /*
-         * New data has arrived.
-         */
-        oscope_redraw_requested =
-            true;
+        if (
+            !prepare_new_sweep()
+        )
+        {
+            return;
+        }
     }
 
 
     /*
-     * Redraw only when needed.
+     * Draw next section.
      */
-    if (
-        oscope_redraw_requested &&
-        oscope_last_count > 0U
-    )
-    {
-        OscopePage_DrawSamples(
-            oscope_samples,
-            oscope_last_count
-        );
-
-
-        oscope_redraw_requested =
-            false;
-    }
-
-
-    OscopePage_UpdateInfoLabel();
+    draw_sweep_chunk();
 }
 
 
-/* ==========================================================
- * Page Enter
- * ========================================================== */
+/* ============================================================
+ * RESET SWEEP
+ * ============================================================ */
 
-void OscopePage_OnEnter(void)
+static void reset_sweep(void)
 {
-    /*
-     * Defaults
-     */
-    oscope_time_index = 2U;
-
-    oscope_volt_index = 2U;
-
-    oscope_trigger_level =
-        2048U;
-
-
-    oscope_last_count = 0U;
-
-    oscope_redraw_requested =
+    sweep_active =
         false;
 
-    last_chart_point_count =
+
+    sweep_drawn_points =
         0U;
 
 
-    /*
-     * Configure chart.
-     */
-    OscopePage_ConfigureChart();
+    sweep_frame_counter =
+        0U;
+
+
+    update_info_box();
 
 
     /*
-     * Create information label.
+     * Execute timer as soon as possible.
      */
-    OscopePage_CreateInfoLabel();
-
-
-    /*
-     * Create Trigger line.
-     */
-    OscopePage_CreateTriggerLine();
-
-
-    /*
-     * Ensure initial Trigger position is correct.
-     */
-    OscopePage_UpdateTriggerLine();
-
-
-    /*
-     * Delete old timer if necessary.
-     */
-    if (oscope_timer != NULL)
+    if (
+        oscope_display_timer != NULL
+    )
     {
-        lv_timer_del(
-            oscope_timer
+        lv_timer_ready(
+            oscope_display_timer
         );
+    }
+}
 
-        oscope_timer = NULL;
+
+/* ============================================================
+ * ENTER PAGE
+ * ============================================================ */
+
+void OscopePage_OnEnter(void)
+{
+    if (
+        objects.osilloscop == NULL ||
+        objects.chart_oscope == NULL
+    )
+    {
+        return;
+    }
+
+
+    oscope_active =
+        true;
+
+
+    /*
+     * Chart.
+     */
+    configure_chart();
+
+
+    /*
+     * Trigger.
+     */
+    create_trigger_line();
+
+
+    /*
+     * Information box.
+     */
+    create_info_box();
+
+
+    /*
+     * Trigger position.
+     */
+    update_trigger_line();
+
+
+    /*
+     * ADC/DMA.
+     */
+    if (
+        !oscope_running
+    )
+    {
+        if (
+            OscopeADC_Start() ==
+            HAL_OK
+        )
+        {
+            oscope_running =
+                true;
+        }
     }
 
 
     /*
-     * Start ADC + DMA + TIM2.
+     * Create dedicated 60 FPS timer.
      */
     if (
-        OscopeADC_Start() ==
-        HAL_OK
+        oscope_display_timer ==
+        NULL
     )
     {
-        oscope_running =
-            true;
+        oscope_display_timer =
+            lv_timer_create(
+                oscilloscope_display_timer_cb,
+                OSCOPE_DISPLAY_PERIOD_MS,
+                NULL
+            );
     }
     else
     {
+        lv_timer_set_period(
+            oscope_display_timer,
+            OSCOPE_DISPLAY_PERIOD_MS
+        );
+    }
+
+
+    /*
+     * Start first sweep.
+     */
+    reset_sweep();
+
+
+    update_info_box();
+}
+
+
+/* ============================================================
+ * EXIT PAGE
+ * ============================================================ */
+
+void OscopePage_OnExit(void)
+{
+    oscope_active =
+        false;
+
+
+    /*
+     * Delete display timer.
+     */
+    if (
+        oscope_display_timer != NULL
+    )
+    {
+        lv_timer_del(
+            oscope_display_timer
+        );
+
+
+        oscope_display_timer =
+            NULL;
+    }
+
+
+    /*
+     * Stop ADC/DMA.
+     */
+    if (
+        oscope_running
+    )
+    {
+        OscopeADC_Stop();
+
+
         oscope_running =
             false;
     }
 
 
-    OscopePage_UpdateRunStopButton();
+    sweep_active =
+        false;
 
-    OscopePage_UpdateInfoLabel();
 
-
-    /*
-     * UI refresh.
-     */
-    oscope_timer =
-        lv_timer_create(
-            OscopePage_TimerCallback,
-            30,
-            NULL
-        );
+    sweep_drawn_points =
+        0U;
 }
 
 
-/* ==========================================================
- * Page Exit
- * ========================================================== */
-
-void OscopePage_OnExit(void)
-{
-    /*
-     * Stop acquisition.
-     */
-    OscopeADC_Stop();
-
-
-    /*
-     * Delete timer.
-     */
-    if (oscope_timer != NULL)
-    {
-        lv_timer_del(
-            oscope_timer
-        );
-
-        oscope_timer = NULL;
-    }
-
-
-    /*
-     * Delete information label.
-     */
-    if (oscope_info_label != NULL)
-    {
-        lv_obj_del(
-            oscope_info_label
-        );
-
-        oscope_info_label = NULL;
-    }
-
-
-    /*
-     * Delete Trigger line.
-     */
-    if (oscope_trigger_line != NULL)
-    {
-        lv_obj_del(
-            oscope_trigger_line
-        );
-
-        oscope_trigger_line = NULL;
-    }
-
-
-    oscope_running = false;
-}
-
-
-/* ==========================================================
+/* ============================================================
  * TIME +
- * ========================================================== */
+ * ============================================================ */
 
 void OscopePage_TimeIncrease(void)
 {
     if (
-        oscope_time_index <
-        (OSCOPE_TIME_DIV_COUNT - 1U)
+        time_div_index + 1U <
+        TIME_DIV_COUNT
     )
     {
-        oscope_time_index++;
+        time_div_index++;
     }
 
 
-    /*
-     * Only request redraw.
-     * Do not redraw inside button callback.
-     */
-    oscope_redraw_requested =
-        true;
+    reset_sweep();
 
 
-    OscopePage_UpdateInfoLabel();
+    update_trigger_line();
 }
 
 
-/* ==========================================================
+/* ============================================================
  * TIME -
- * ========================================================== */
+ * ============================================================ */
 
 void OscopePage_TimeDecrease(void)
 {
-    if (oscope_time_index > 0U)
+    if (
+        time_div_index >
+        0U
+    )
     {
-        oscope_time_index--;
+        time_div_index--;
     }
 
 
-    oscope_redraw_requested =
-        true;
+    reset_sweep();
 
 
-    OscopePage_UpdateInfoLabel();
+    update_trigger_line();
 }
 
 
-/* ==========================================================
+/* ============================================================
  * VOLT +
- * ========================================================== */
+ * ============================================================ */
 
 void OscopePage_VoltIncrease(void)
 {
     if (
-        oscope_volt_index <
-        (OSCOPE_VOLT_DIV_COUNT - 1U)
+        volt_div_index + 1U <
+        VOLT_DIV_COUNT
     )
     {
-        oscope_volt_index++;
+        volt_div_index++;
     }
 
 
-    /*
-     * Trigger line moves together with vertical scaling.
-     */
-    OscopePage_UpdateTriggerLine();
+    reset_sweep();
 
 
-    oscope_redraw_requested =
-        true;
-
-
-    OscopePage_UpdateInfoLabel();
+    update_trigger_line();
 }
 
 
-/* ==========================================================
+/* ============================================================
  * VOLT -
- * ========================================================== */
+ * ============================================================ */
 
 void OscopePage_VoltDecrease(void)
 {
-    if (oscope_volt_index > 0U)
+    if (
+        volt_div_index >
+        0U
+    )
     {
-        oscope_volt_index--;
+        volt_div_index--;
     }
 
 
-    OscopePage_UpdateTriggerLine();
+    reset_sweep();
 
 
-    oscope_redraw_requested =
-        true;
-
-
-    OscopePage_UpdateInfoLabel();
+    update_trigger_line();
 }
 
 
-/* ==========================================================
+/* ============================================================
  * TRIGGER +
- * ========================================================== */
+ * ============================================================ */
 
 void OscopePage_TriggerIncrease(void)
 {
@@ -1589,144 +2356,180 @@ void OscopePage_TriggerIncrease(void)
 
     new_level =
         (uint32_t)
-        oscope_trigger_level +
-        OSCOPE_TRIGGER_STEP;
+        trigger_level
+        +
+        TRIGGER_STEP;
 
 
     if (
         new_level >
-        OSCOPE_TRIGGER_MAX
+        TRIGGER_MAX
     )
     {
         new_level =
-            OSCOPE_TRIGGER_MAX;
+            TRIGGER_MAX;
     }
 
 
-    oscope_trigger_level =
+    trigger_level =
         (uint16_t)new_level;
 
 
-    /*
-     * Move visible Trigger line immediately.
-     */
-    OscopePage_UpdateTriggerLine();
+    update_trigger_line();
 
 
-    /*
-     * Redraw waveform around the new trigger
-     * on the next timer cycle.
-     */
-    oscope_redraw_requested =
-        true;
-
-
-    OscopePage_UpdateInfoLabel();
+    reset_sweep();
 }
 
 
-/* ==========================================================
+/* ============================================================
  * TRIGGER -
- * ========================================================== */
+ * ============================================================ */
 
 void OscopePage_TriggerDecrease(void)
 {
-    int32_t new_level;
+    uint32_t new_level;
 
 
-    new_level =
-        (int32_t)
-        oscope_trigger_level -
-        (int32_t)
-        OSCOPE_TRIGGER_STEP;
+    if (
+        trigger_level >
+        TRIGGER_STEP
+    )
+    {
+        new_level =
+            (uint32_t)
+            trigger_level
+            -
+            TRIGGER_STEP;
+    }
+    else
+    {
+        new_level =
+            0U;
+    }
 
 
     if (
         new_level <
-        OSCOPE_TRIGGER_MIN
+        TRIGGER_MIN
     )
     {
         new_level =
-            OSCOPE_TRIGGER_MIN;
+            TRIGGER_MIN;
     }
 
 
-    oscope_trigger_level =
+    trigger_level =
         (uint16_t)new_level;
 
 
-    OscopePage_UpdateTriggerLine();
+    update_trigger_line();
 
 
-    oscope_redraw_requested =
-        true;
-
-
-    OscopePage_UpdateInfoLabel();
+    reset_sweep();
 }
 
 
-/* ==========================================================
+/* ============================================================
  * RUN / STOP
- * ========================================================== */
+ * ============================================================ */
 
 void OscopePage_ToggleRunStop(void)
 {
-    HAL_StatusTypeDef status;
-
-
-    if (oscope_running)
+    if (
+        oscope_running
+    )
     {
-        /*
-         * STOP
-         */
-        status =
-            OscopeADC_Stop();
-
-
-        (void)status;
+        OscopeADC_Stop();
 
 
         oscope_running =
             false;
+
+
+        sweep_active =
+            false;
     }
     else
     {
-        /*
-         * RUN
-         */
-        status =
-            OscopeADC_Start();
-
-
-        if (status == HAL_OK)
+        if (
+            OscopeADC_Start() ==
+            HAL_OK
+        )
         {
             oscope_running =
                 true;
 
-            oscope_redraw_requested =
-                true;
+
+            reset_sweep();
         }
     }
 
 
-    OscopePage_UpdateRunStopButton();
-
-    OscopePage_UpdateInfoLabel();
+    update_info_box();
 }
 
 
-/* ==========================================================
- * Compatibility
- * ========================================================== */
+/* ============================================================
+ * SWEEP +
+ *
+ * Faster
+ * ============================================================ */
 
-void OscopePage_IncreaseSpeed(void)
+void OscopePage_SweepIncrease(void)
 {
-    OscopePage_TimeIncrease();
+    if (
+        sweep_speed_index + 1U <
+        SWEEP_SPEED_COUNT
+    )
+    {
+        sweep_speed_index++;
+    }
+
+
+    /*
+     * Start immediately with new speed.
+     */
+    reset_sweep();
 }
 
 
-void OscopePage_DecreaseSpeed(void)
+/* ============================================================
+ * SWEEP -
+ *
+ * Slower
+ * ============================================================ */
+
+void OscopePage_SweepDecrease(void)
 {
-    OscopePage_TimeDecrease();
+    if (
+        sweep_speed_index >
+        0U
+    )
+    {
+        sweep_speed_index--;
+    }
+
+
+    /*
+     * Start immediately with new speed.
+     */
+    reset_sweep();
+}
+
+
+/* ============================================================
+ * PERIODIC TASK
+ * ============================================================ */
+
+/*
+ * The dedicated LVGL timer handles the oscilloscope.
+ *
+ * Tasks_Run() may still call this function every 5 ms.
+ */
+void OscopePage_Task(void)
+{
+    /*
+     * Intentionally empty.
+     */
 }

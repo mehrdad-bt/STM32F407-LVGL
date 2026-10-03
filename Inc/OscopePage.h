@@ -5,6 +5,11 @@
 extern "C" {
 #endif
 
+/* ============================================================
+ * OSCILLOSCOPE PAGE API
+ * ============================================================
+ */
+
 void OscopePage_OnEnter(void);
 void OscopePage_OnExit(void);
 
@@ -19,8 +24,10 @@ void OscopePage_TriggerDecrease(void);
 
 void OscopePage_ToggleRunStop(void);
 
-void OscopePage_IncreaseSpeed(void);
-void OscopePage_DecreaseSpeed(void);
+void OscopePage_SweepIncrease(void);
+void OscopePage_SweepDecrease(void);
+
+void OscopePage_Task(void);
 
 #ifdef __cplusplus
 }

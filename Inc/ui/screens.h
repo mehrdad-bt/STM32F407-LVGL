@@ -49,6 +49,8 @@ typedef struct _objects_t {
     lv_obj_t *trig_plus_btn;
     lv_obj_t *trig_minus_btn;
     lv_obj_t *stop_run_btn;
+    lv_obj_t *obj0;
+    lv_obj_t *obj1;
 } objects_t;
 
 extern objects_t objects;

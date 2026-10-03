@@ -11,25 +11,26 @@
 #include "ui/screens.h"
 
 
-/* ==========================================================
- * Helper
- * ========================================================== */
+/* ============================================================
+ * HELPER
+ * ============================================================ */
 
-static bool is_oscilloscope_button_event(lv_event_t *e)
+static bool is_oscilloscope_button_event(
+    lv_event_t *e
+)
 {
     if (e == NULL)
     {
         return false;
     }
 
-    lv_event_code_t code = lv_event_get_code(e);
+    lv_event_code_t code =
+        lv_event_get_code(e);
 
-    /*
-     * دکمه‌های EEZ فعلاً روی PRESSED تنظیم شده‌اند.
-     * RELEASED را هم قبول می‌کنیم.
-     */
-    if (code == LV_EVENT_PRESSED ||
-        code == LV_EVENT_RELEASED)
+    if (
+        code == LV_EVENT_PRESSED ||
+        code == LV_EVENT_RELEASED
+    )
     {
         return true;
     }
@@ -38,18 +39,19 @@ static bool is_oscilloscope_button_event(lv_event_t *e)
 }
 
 
-/* ==========================================================
- * Calibration
- * ========================================================== */
+/* ============================================================
+ * CALIBRATION
+ * ============================================================ */
 
-void action_calibration(lv_event_t *e)
+void action_calibration(
+    lv_event_t *e
+)
 {
-    if (e == NULL)
-    {
-        return;
-    }
-
-    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
+    if (
+        e == NULL ||
+        lv_event_get_code(e) !=
+        LV_EVENT_RELEASED
+    )
     {
         return;
     }
@@ -58,128 +60,158 @@ void action_calibration(lv_event_t *e)
 }
 
 
-/* ==========================================================
- * Error Hide / Show
- * ========================================================== */
+/* ============================================================
+ * ERROR HIDE
+ * ============================================================ */
 
-void action_error_hide(lv_event_t *e)
+void action_error_hide(
+    lv_event_t *e
+)
 {
+    lv_obj_t *obj;
+
     if (e == NULL)
     {
         return;
     }
 
-    lv_obj_t *obj = lv_event_get_target(e);
+    obj =
+        lv_event_get_target(e);
 
     if (obj == NULL)
     {
         return;
     }
 
-    if (lv_obj_has_state(obj, LV_STATE_CHECKED))
+    if (
+        lv_obj_has_state(
+            obj,
+            LV_STATE_CHECKED
+        )
+    )
     {
-        MessageBox_SetHidden(true);
+        MessageBox_SetHidden(
+            true
+        );
     }
     else
     {
-        MessageBox_SetHidden(false);
+        MessageBox_SetHidden(
+            false
+        );
     }
 }
 
 
-/* ==========================================================
- * Main -> Temp
- * ========================================================== */
+/* ============================================================
+ * TEMPERATURE PAGE
+ * ============================================================ */
 
-void action_go_to_temp_page(lv_event_t *e)
+void action_go_to_temp_page(
+    lv_event_t *e
+)
 {
-    if (e == NULL)
+    if (
+        e == NULL ||
+        lv_event_get_code(e) !=
+        LV_EVENT_RELEASED
+    )
     {
         return;
     }
 
-    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
-    {
-        return;
-    }
-
-    lv_scr_load(objects.temp);
+    lv_scr_load(
+        objects.temp
+    );
 
     TempPage_OnEnter();
 }
 
 
-/* ==========================================================
- * Temp -> Main
- * ========================================================== */
+/* ============================================================
+ * BACK TO MAIN
+ * ============================================================ */
 
-void action_back_to_main(lv_event_t *e)
+void action_back_to_main(
+    lv_event_t *e
+)
 {
-    if (e == NULL)
+    if (
+        e == NULL ||
+        lv_event_get_code(e) !=
+        LV_EVENT_RELEASED
+    )
     {
         return;
     }
 
-    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
-    {
-        return;
-    }
-
-    lv_scr_load(objects.main);
+    lv_scr_load(
+        objects.main
+    );
 }
 
 
-/* ==========================================================
- * Main -> Oscilloscope
- * ========================================================== */
+/* ============================================================
+ * GO TO OSCILLOSCOPE
+ * ============================================================ */
 
-void action_go_to_oscope_page(lv_event_t *e)
+void action_go_to_oscope_page(
+    lv_event_t *e
+)
 {
-    if (e == NULL)
+    if (
+        e == NULL ||
+        lv_event_get_code(e) !=
+        LV_EVENT_RELEASED
+    )
     {
         return;
     }
 
-    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
-    {
-        return;
-    }
-
-    lv_scr_load(objects.osilloscop);
+    lv_scr_load(
+        objects.osilloscop
+    );
 
     OscopePage_OnEnter();
 }
 
 
-/* ==========================================================
- * Oscilloscope -> Main
- * ========================================================== */
+/* ============================================================
+ * EXIT OSCILLOSCOPE
+ * ============================================================ */
 
-void action_exit_from_oscope_page(lv_event_t *e)
+void action_exit_from_oscope_page(
+    lv_event_t *e
+)
 {
-    if (e == NULL)
-    {
-        return;
-    }
-
-    if (lv_event_get_code(e) != LV_EVENT_RELEASED)
+    if (
+        e == NULL ||
+        lv_event_get_code(e) !=
+        LV_EVENT_RELEASED
+    )
     {
         return;
     }
 
     OscopePage_OnExit();
 
-    lv_scr_load(objects.main);
+    lv_scr_load(
+        objects.main
+    );
 }
 
 
-/* ==========================================================
- * TIME +
- * ========================================================== */
+/* ============================================================
+ * TIME
+ * ============================================================ */
 
-void action_time_increase(lv_event_t *e)
+void action_time_increase(
+    lv_event_t *e
+)
 {
-    if (!is_oscilloscope_button_event(e))
+    if (
+        !is_oscilloscope_button_event(e)
+    )
     {
         return;
     }
@@ -188,13 +220,13 @@ void action_time_increase(lv_event_t *e)
 }
 
 
-/* ==========================================================
- * TIME -
- * ========================================================== */
-
-void action_time_decrease(lv_event_t *e)
+void action_time_decrease(
+    lv_event_t *e
+)
 {
-    if (!is_oscilloscope_button_event(e))
+    if (
+        !is_oscilloscope_button_event(e)
+    )
     {
         return;
     }
@@ -203,13 +235,17 @@ void action_time_decrease(lv_event_t *e)
 }
 
 
-/* ==========================================================
- * VOLT +
- * ========================================================== */
+/* ============================================================
+ * VOLT
+ * ============================================================ */
 
-void action_volt_increase(lv_event_t *e)
+void action_volt_increase(
+    lv_event_t *e
+)
 {
-    if (!is_oscilloscope_button_event(e))
+    if (
+        !is_oscilloscope_button_event(e)
+    )
     {
         return;
     }
@@ -218,13 +254,13 @@ void action_volt_increase(lv_event_t *e)
 }
 
 
-/* ==========================================================
- * VOLT -
- * ========================================================== */
-
-void action_volt_decrease(lv_event_t *e)
+void action_volt_decrease(
+    lv_event_t *e
+)
 {
-    if (!is_oscilloscope_button_event(e))
+    if (
+        !is_oscilloscope_button_event(e)
+    )
     {
         return;
     }
@@ -233,13 +269,17 @@ void action_volt_decrease(lv_event_t *e)
 }
 
 
-/* ==========================================================
- * TRIG +
- * ========================================================== */
+/* ============================================================
+ * TRIGGER
+ * ============================================================ */
 
-void action_trig_increase(lv_event_t *e)
+void action_trig_increase(
+    lv_event_t *e
+)
 {
-    if (!is_oscilloscope_button_event(e))
+    if (
+        !is_oscilloscope_button_event(e)
+    )
     {
         return;
     }
@@ -248,13 +288,13 @@ void action_trig_increase(lv_event_t *e)
 }
 
 
-/* ==========================================================
- * TRIG -
- * ========================================================== */
-
-void action_trig_decrease(lv_event_t *e)
+void action_trig_decrease(
+    lv_event_t *e
+)
 {
-    if (!is_oscilloscope_button_event(e))
+    if (
+        !is_oscilloscope_button_event(e)
+    )
     {
         return;
     }
@@ -263,13 +303,17 @@ void action_trig_decrease(lv_event_t *e)
 }
 
 
-/* ==========================================================
+/* ============================================================
  * STOP / RUN
- * ========================================================== */
+ * ============================================================ */
 
-void action_stop_run_oscope(lv_event_t *e)
+void action_stop_run_oscope(
+    lv_event_t *e
+)
 {
-    if (!is_oscilloscope_button_event(e))
+    if (
+        !is_oscilloscope_button_event(e)
+    )
     {
         return;
     }
@@ -278,18 +322,57 @@ void action_stop_run_oscope(lv_event_t *e)
 }
 
 
-/* ==========================================================
- * Message box switch
- * ========================================================== */
+/* ============================================================
+ * SWEEP INCREASE
+ * ============================================================ */
 
-void event_handler_cb_main_msg_hide_switch(lv_event_t *e)
+void action_sweep_increase(
+    lv_event_t *e
+)
 {
-    if (e == NULL)
+    if (
+        !is_oscilloscope_button_event(e)
+    )
     {
         return;
     }
 
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    OscopePage_SweepIncrease();
+}
+
+
+/* ============================================================
+ * SWEEP DECREASE
+ * ============================================================ */
+
+void action_sweep_decrease(
+    lv_event_t *e
+)
+{
+    if (
+        !is_oscilloscope_button_event(e)
+    )
+    {
+        return;
+    }
+
+    OscopePage_SweepDecrease();
+}
+
+
+/* ============================================================
+ * MAIN MESSAGE HIDE SWITCH
+ * ============================================================ */
+
+void event_handler_cb_main_msg_hide_switch(
+    lv_event_t *e
+)
+{
+    if (
+        e == NULL ||
+        lv_event_get_code(e) !=
+        LV_EVENT_VALUE_CHANGED
+    )
     {
         return;
     }
