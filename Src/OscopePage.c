@@ -13,37 +13,42 @@
 
 
 /* ==========================================================
- * Configuration
+ * General configuration
  * ========================================================== */
 
-#define OSCOPE_POINT_COUNT             300U
+#define OSCOPE_ADC_MAX                 4095U
+#define OSCOPE_ADC_REFERENCE           3.3f
 
-#define OSCOPE_ADC_MAX                4095U
-
-#define OSCOPE_ADC_REFERENCE          3.3f
-
-#define OSCOPE_HORIZONTAL_DIVS        10U
-
+#define OSCOPE_HORIZONTAL_DIVS         10U
 #define OSCOPE_VERTICAL_DIVS           8U
 
-#define OSCOPE_TRIGGER_POSITION       25U
+/*
+ * Trigger position on screen.
+ *
+ * 25% means the trigger point is placed
+ * approximately at one quarter of the
+ * horizontal screen width.
+ */
+#define OSCOPE_TRIGGER_POSITION         25U
 
 
 /* ==========================================================
- * Time / Div
+ * Time / Division
  * ========================================================== */
 
 /*
- * Sample rate = 200 kHz
+ * ADC sample rate is currently:
  *
- * Samples:
+ * 200 kHz
  *
- * 20 us/div  -> 4 samples/div  -> 40 samples
- * 50 us/div  -> 10 samples/div -> 100 samples
- * 100 us/div -> 20 samples/div -> 200 samples
- * 200 us/div -> 40 samples/div -> 400 samples
+ * Therefore:
+ *
+ * 20 us/div  -> 40 samples total
+ * 50 us/div  -> 100 samples total
+ * 100 us/div -> 200 samples total
+ * 200 us/div -> 400 samples total
  */
-static const uint32_t time_div_us[] =
+static const uint32_t oscope_time_div_us[] =
 {
     20U,
     50U,
@@ -51,19 +56,18 @@ static const uint32_t time_div_us[] =
     200U
 };
 
+#define OSCOPE_TIME_DIV_COUNT \
+    (sizeof(oscope_time_div_us) / \
+     sizeof(oscope_time_div_us[0]))
 
-#define TIME_DIV_COUNT \
-    (sizeof(time_div_us) / sizeof(time_div_us[0]))
-
-
-static uint32_t time_div_index = 2U;
+static uint32_t oscope_time_index = 2U;
 
 
 /* ==========================================================
- * Volt / Div
+ * Volt / Division
  * ========================================================== */
 
-static const float volt_div_values[] =
+static const float oscope_volt_div_values[] =
 {
     0.1f,
     0.2f,
@@ -72,8 +76,7 @@ static const float volt_div_values[] =
     2.0f
 };
 
-
-static const char *volt_div_labels[] =
+static const char *oscope_volt_div_labels[] =
 {
     "0.1V",
     "0.2V",
@@ -82,23 +85,41 @@ static const char *volt_div_labels[] =
     "2.0V"
 };
 
+#define OSCOPE_VOLT_DIV_COUNT \
+    (sizeof(oscope_volt_div_values) / \
+     sizeof(oscope_volt_div_values[0]))
 
-#define VOLT_DIV_COUNT \
-    (sizeof(volt_div_values) / sizeof(volt_div_values[0]))
-
-
-static uint32_t volt_div_index = 2U;
+static uint32_t oscope_volt_index = 2U;
 
 
 /* ==========================================================
  * Trigger
  * ========================================================== */
 
-#define TRIGGER_MIN_ADC      128U
-#define TRIGGER_MAX_ADC     3967U
-#define TRIGGER_STEP_ADC     128U
+/*
+ * Trigger level in ADC counts.
+ *
+ * 0 V     = 0
+ * 3.3 V   = 4095
+ * 1.65 V  = about 2048
+ */
+#define OSCOPE_TRIGGER_MIN             128U
+#define OSCOPE_TRIGGER_MAX            3967U
+#define OSCOPE_TRIGGER_STEP             64U
 
-static uint16_t trigger_level_adc = 2048U;
+/*
+ * Trigger hysteresis.
+ *
+ * For example, with trigger = 2048:
+ *
+ * previous <= 2016
+ * current  >= 2080
+ *
+ * will be accepted as a rising edge.
+ */
+#define OSCOPE_TRIGGER_HYSTERESIS      32U
+
+static uint16_t oscope_trigger_level = 2048U;
 
 
 /* ==========================================================
@@ -109,7 +130,7 @@ static bool oscope_running = false;
 
 
 /* ==========================================================
- * LVGL
+ * LVGL objects
  * ========================================================== */
 
 static lv_timer_t *oscope_timer = NULL;
@@ -120,7 +141,7 @@ static lv_chart_series_t *oscope_series = NULL;
 
 
 /* ==========================================================
- * Samples
+ * ADC samples
  * ========================================================== */
 
 static uint16_t oscope_samples[
@@ -185,33 +206,52 @@ static float OscopePage_AdcToVoltage(
 
 
 /* ==========================================================
- * Time/Div -> number of source samples
+ * Calculate visible samples from Time/Div
  * ========================================================== */
 
 static uint16_t OscopePage_GetVisibleSampleCount(void)
 {
+    uint32_t sample_rate;
     uint32_t total_time_us;
     uint32_t samples;
 
 
+    sample_rate =
+        OscopeADC_GetSampleRate();
+
+
     total_time_us =
-        time_div_us[time_div_index] *
+        oscope_time_div_us[
+            oscope_time_index
+        ] *
         OSCOPE_HORIZONTAL_DIVS;
 
 
+    /*
+     * samples =
+     *
+     * sample_rate * time
+     *
+     * Hz * us / 1,000,000
+     */
     samples =
         (
-            OscopeADC_GetSampleRate() *
+            sample_rate *
             total_time_us
-        ) / 1000000UL;
+        ) /
+        1000000UL;
 
 
-    if (samples < 20U)
+    if (samples < 2U)
     {
-        samples = 20U;
+        samples = 2U;
     }
 
 
+    /*
+     * DMA half-buffer is our maximum
+     * currently available block size.
+     */
     if (samples >
         OSCOPE_ADC_BLOCK_SIZE)
     {
@@ -227,7 +267,9 @@ static uint16_t OscopePage_GetVisibleSampleCount(void)
 /* ==========================================================
  * ADC -> Chart
  *
- * Vertical center = 1.65V
+ * Volt/Div changes the visible vertical range.
+ *
+ * Center = 1.65 V
  * ========================================================== */
 
 static uint16_t OscopePage_AdcToChart(
@@ -235,15 +277,12 @@ static uint16_t OscopePage_AdcToChart(
 )
 {
     float sample_voltage;
-
     float center_voltage;
 
     float total_range;
-
     float min_voltage;
 
     float ratio;
-
     float chart_value;
 
 
@@ -254,12 +293,13 @@ static uint16_t OscopePage_AdcToChart(
 
 
     center_voltage =
-        OSCOPE_ADC_REFERENCE /
-        2.0f;
+        OSCOPE_ADC_REFERENCE / 2.0f;
 
 
     total_range =
-        volt_div_values[volt_div_index] *
+        oscope_volt_div_values[
+            oscope_volt_index
+        ] *
         (float)OSCOPE_VERTICAL_DIVS;
 
 
@@ -279,7 +319,8 @@ static uint16_t OscopePage_AdcToChart(
         (
             sample_voltage -
             min_voltage
-        ) / total_range;
+        ) /
+        total_range;
 
 
     if (ratio <= 0.0f)
@@ -318,7 +359,7 @@ static uint16_t OscopePage_AdcToChart(
 
 
 /* ==========================================================
- * Find trigger
+ * Find rising trigger edge
  * ========================================================== */
 
 static int OscopePage_FindTrigger(
@@ -327,6 +368,9 @@ static int OscopePage_FindTrigger(
 )
 {
     uint16_t i;
+
+    uint16_t low_level;
+    uint16_t high_level;
 
 
     if (samples == NULL)
@@ -341,19 +385,56 @@ static int OscopePage_FindTrigger(
     }
 
 
-    for (i = 1U;
-         i < count;
-         i++)
+    /*
+     * Calculate hysteresis thresholds.
+     */
+    if (
+        oscope_trigger_level >
+        OSCOPE_TRIGGER_HYSTERESIS
+    )
     {
-        /*
-         * Rising edge
-         */
+        low_level =
+            oscope_trigger_level -
+            OSCOPE_TRIGGER_HYSTERESIS;
+    }
+    else
+    {
+        low_level = 0U;
+    }
+
+
+    if (
+        oscope_trigger_level <
+        (OSCOPE_ADC_MAX -
+         OSCOPE_TRIGGER_HYSTERESIS)
+    )
+    {
+        high_level =
+            oscope_trigger_level +
+            OSCOPE_TRIGGER_HYSTERESIS;
+    }
+    else
+    {
+        high_level =
+            OSCOPE_ADC_MAX;
+    }
+
+
+    /*
+     * Rising edge:
+     *
+     * previous <= low threshold
+     * current  >= high threshold
+     */
+    for (
+        i = 1U;
+        i < count;
+        i++
+    )
+    {
         if (
-            samples[i - 1U] <
-                trigger_level_adc
-            &&
-            samples[i] >=
-                trigger_level_adc
+            samples[i - 1U] <= low_level &&
+            samples[i] >= high_level
         )
         {
             return (int)i;
@@ -383,9 +464,15 @@ static void OscopePage_ConfigureChart(void)
     );
 
 
+    /*
+     * Initial point count.
+     *
+     * It will be changed dynamically according
+     * to Time/Div.
+     */
     lv_chart_set_point_count(
         objects.chart_oscope,
-        OSCOPE_POINT_COUNT
+        200U
     );
 
 
@@ -403,6 +490,9 @@ static void OscopePage_ConfigureChart(void)
     );
 
 
+    /*
+     * Remove point markers.
+     */
     lv_obj_set_style_size(
         objects.chart_oscope,
         0,
@@ -410,6 +500,9 @@ static void OscopePage_ConfigureChart(void)
     );
 
 
+    /*
+     * Create series only once.
+     */
     if (oscope_series == NULL)
     {
         oscope_series =
@@ -492,7 +585,7 @@ static void OscopePage_CreateInfoLabel(void)
 
 
 /* ==========================================================
- * Update info label
+ * Update information label
  * ========================================================== */
 
 static void OscopePage_UpdateInfoLabel(void)
@@ -505,7 +598,13 @@ static void OscopePage_UpdateInfoLabel(void)
 
     uint32_t trigger_millivolts;
 
-    char text[128];
+    uint32_t sample_rate;
+
+    uint16_t visible_samples;
+
+    uint32_t visible_time_us;
+
+    char text[160];
 
     const char *run_text;
 
@@ -532,20 +631,26 @@ static void OscopePage_UpdateInfoLabel(void)
             ];
 
 
-        for (i = 0U;
-             i < oscope_last_count;
-             i++)
+        for (
+            i = 0U;
+            i < oscope_last_count;
+            i++
+        )
         {
-            if (oscope_samples[i] <
-                min_value)
+            if (
+                oscope_samples[i] <
+                min_value
+            )
             {
                 min_value =
                     oscope_samples[i];
             }
 
 
-            if (oscope_samples[i] >
-                max_value)
+            if (
+                oscope_samples[i] >
+                max_value
+            )
             {
                 max_value =
                     oscope_samples[i];
@@ -561,9 +666,35 @@ static void OscopePage_UpdateInfoLabel(void)
 
     trigger_millivolts =
         (
-            (uint32_t)trigger_level_adc *
+            (uint32_t)
+            oscope_trigger_level *
             3300UL
-        ) / OSCOPE_ADC_MAX;
+        ) /
+        OSCOPE_ADC_MAX;
+
+
+    sample_rate =
+        OscopeADC_GetSampleRate();
+
+
+    visible_samples =
+        OscopePage_GetVisibleSampleCount();
+
+
+    if (sample_rate > 0U)
+    {
+        visible_time_us =
+            (
+                (uint32_t)
+                visible_samples *
+                1000000UL
+            ) /
+            sample_rate;
+    }
+    else
+    {
+        visible_time_us = 0U;
+    }
 
 
     if (oscope_running)
@@ -581,25 +712,32 @@ static void OscopePage_UpdateInfoLabel(void)
         sizeof(text),
 
         "ADC:%4u MIN:%4u MAX:%4u\n"
-        "T:%luus V:%s TR:%lumV %s",
+        "T:%luus V:%s TR:%lumV %s\n"
+        "%luS/s %luus",
 
         latest,
         min_value,
         max_value,
 
         (unsigned long)
-            time_div_us[
-                time_div_index
-            ],
+        oscope_time_div_us[
+            oscope_time_index
+        ],
 
-        volt_div_labels[
-            volt_div_index
+        oscope_volt_div_labels[
+            oscope_volt_index
         ],
 
         (unsigned long)
-            trigger_millivolts,
+        trigger_millivolts,
 
-        run_text
+        run_text,
+
+        (unsigned long)
+        sample_rate,
+
+        (unsigned long)
+        visible_time_us
     );
 
 
@@ -611,7 +749,7 @@ static void OscopePage_UpdateInfoLabel(void)
 
 
 /* ==========================================================
- * STOP / RUN button label
+ * Update RUN / STOP button
  * ========================================================== */
 
 static void OscopePage_UpdateRunStopButton(void)
@@ -625,6 +763,10 @@ static void OscopePage_UpdateRunStopButton(void)
     }
 
 
+    /*
+     * The only child of stop_run_btn
+     * is its label.
+     */
     label =
         lv_obj_get_child(
             objects.stop_run_btn,
@@ -666,6 +808,8 @@ static void OscopePage_DrawSamples(
 {
     uint16_t visible_count;
 
+    uint16_t display_count;
+
     uint16_t display_index;
 
     uint16_t source_index;
@@ -677,6 +821,8 @@ static void OscopePage_DrawSamples(
     int start_index;
 
     int maximum_start;
+
+    int pretrigger_samples;
 
 
     if (samples == NULL)
@@ -709,6 +855,10 @@ static void OscopePage_DrawSamples(
     }
 
 
+    /*
+     * Exact number of ADC samples corresponding
+     * to the selected Time/Div.
+     */
     visible_count =
         OscopePage_GetVisibleSampleCount();
 
@@ -719,9 +869,36 @@ static void OscopePage_DrawSamples(
     }
 
 
+    if (visible_count < 2U)
+    {
+        visible_count = 2U;
+    }
+
+
     /*
-     * اگر Trigger نداریم،
-     * آخرین window داده را نشان بده.
+     * ------------------------------------------------------
+     * Trigger
+     * ------------------------------------------------------
+     */
+    trigger_index =
+        OscopePage_FindTrigger(
+            samples,
+            count
+        );
+
+
+    /*
+     * Number of samples before trigger.
+     */
+    pretrigger_samples =
+        (
+            (int)visible_count *
+            OSCOPE_TRIGGER_POSITION
+        ) / 100;
+
+
+    /*
+     * Largest possible window start.
      */
     maximum_start =
         (int)count -
@@ -734,32 +911,20 @@ static void OscopePage_DrawSamples(
     }
 
 
+    /*
+     * Default:
+     * show the latest window.
+     */
     start_index =
         maximum_start;
 
 
     /*
-     * پیدا کردن rising edge
+     * If trigger was found,
+     * place it around 25% of the display.
      */
-    trigger_index =
-        OscopePage_FindTrigger(
-            samples,
-            count
-        );
-
-
     if (trigger_index >= 0)
     {
-        int pretrigger_samples;
-
-
-        pretrigger_samples =
-            (
-                (int)visible_count *
-                OSCOPE_TRIGGER_POSITION
-            ) / 100;
-
-
         start_index =
             trigger_index -
             pretrigger_samples;
@@ -781,7 +946,33 @@ static void OscopePage_DrawSamples(
 
 
     /*
-     * نمودار قبلی پاک شود.
+     * ------------------------------------------------------
+     * Point count
+     * ------------------------------------------------------
+     *
+     * This is important:
+     *
+     * The chart point count now follows
+     * the actual number of samples.
+     *
+     * So 40 source samples at 20us/div
+     * stay 40 points.
+     *
+     * We no longer stretch 40 samples into
+     * 300 duplicated points.
+     */
+    display_count =
+        visible_count;
+
+
+    lv_chart_set_point_count(
+        objects.chart_oscope,
+        display_count
+    );
+
+
+    /*
+     * Clear previous waveform.
      */
     lv_chart_set_all_value(
         objects.chart_oscope,
@@ -791,39 +982,20 @@ static void OscopePage_DrawSamples(
 
 
     /*
-     * همیشه دقیقاً 300 نقطه برای LVGL تولید می‌کنیم.
-     *
-     * اگر source کمتر باشد، sampleها کشیده می‌شوند.
-     * اگر source بیشتر باشد، decimation انجام می‌شود.
+     * ------------------------------------------------------
+     * Draw exact source samples
+     * ------------------------------------------------------
      */
     for (
         display_index = 0U;
-        display_index < OSCOPE_POINT_COUNT;
+        display_index < display_count;
         display_index++
     )
     {
-        uint32_t source_offset;
-
-
-        if (OSCOPE_POINT_COUNT <= 1U)
-        {
-            source_offset = 0U;
-        }
-        else
-        {
-            source_offset =
-                (
-                    (uint32_t)display_index *
-                    (uint32_t)(visible_count - 1U)
-                ) /
-                (uint32_t)(OSCOPE_POINT_COUNT - 1U);
-        }
-
-
         source_index =
             (uint16_t)(
                 start_index +
-                (int)source_offset
+                (int)display_index
             );
 
 
@@ -841,9 +1013,10 @@ static void OscopePage_DrawSamples(
 
 
         /*
-         * همان روش موفق قبلی:
+         * Important:
          *
-         * set_next_value
+         * set_next_value was the method that
+         * produced the working waveform.
          */
         lv_chart_set_next_value(
             objects.chart_oscope,
@@ -865,7 +1038,7 @@ static void OscopePage_DrawSamples(
 
 
 /* ==========================================================
- * Draw current block
+ * Redraw last samples after setting changes
  * ========================================================== */
 
 static void OscopePage_DrawLastSamples(void)
@@ -908,6 +1081,9 @@ static void OscopePage_TimerCallback(
     }
 
 
+    /*
+     * Get newest complete DMA block.
+     */
     received =
         OscopeADC_GetLatestBlock(
             oscope_samples,
@@ -936,25 +1112,30 @@ static void OscopePage_TimerCallback(
 
 
 /* ==========================================================
- * ENTER
+ * Page Enter
  * ========================================================== */
 
 void OscopePage_OnEnter(void)
 {
     /*
-     * Default settings
+     * Default:
+     *
+     * 100 us/div
+     * 0.5 V/div
+     * 1.65 V trigger
      */
-    time_div_index = 2U;
+    oscope_time_index = 2U;
 
-    volt_div_index = 2U;
+    oscope_volt_index = 2U;
 
-    trigger_level_adc = 2048U;
+    oscope_trigger_level =
+        2048U;
 
     oscope_last_count = 0U;
 
 
     /*
-     * Chart
+     * Configure chart.
      */
     OscopePage_ConfigureChart();
 
@@ -975,13 +1156,13 @@ void OscopePage_OnEnter(void)
 
 
     /*
-     * Info label
+     * Create info label.
      */
     OscopePage_CreateInfoLabel();
 
 
     /*
-     * Timer قبلی
+     * Delete old timer if any.
      */
     if (oscope_timer != NULL)
     {
@@ -994,9 +1175,12 @@ void OscopePage_OnEnter(void)
 
 
     /*
-     * شروع ADC + DMA + TIM2
+     * Start ADC + DMA + TIM2.
      */
-    if (OscopeADC_Start() == HAL_OK)
+    if (
+        OscopeADC_Start() ==
+        HAL_OK
+    )
     {
         oscope_running = true;
     }
@@ -1012,7 +1196,7 @@ void OscopePage_OnEnter(void)
 
 
     /*
-     * UI refresh = 20ms
+     * LVGL refresh timer.
      */
     oscope_timer =
         lv_timer_create(
@@ -1024,14 +1208,20 @@ void OscopePage_OnEnter(void)
 
 
 /* ==========================================================
- * EXIT
+ * Page Exit
  * ========================================================== */
 
 void OscopePage_OnExit(void)
 {
+    /*
+     * Stop ADC + DMA + TIM2.
+     */
     OscopeADC_Stop();
 
 
+    /*
+     * Stop LVGL timer.
+     */
     if (oscope_timer != NULL)
     {
         lv_timer_del(
@@ -1042,6 +1232,9 @@ void OscopePage_OnExit(void)
     }
 
 
+    /*
+     * Delete custom information label.
+     */
     if (oscope_info_label != NULL)
     {
         lv_obj_del(
@@ -1062,13 +1255,19 @@ void OscopePage_OnExit(void)
 
 void OscopePage_TimeIncrease(void)
 {
-    if (time_div_index <
-        TIME_DIV_COUNT - 1U)
+    if (
+        oscope_time_index <
+        (OSCOPE_TIME_DIV_COUNT - 1U)
+    )
     {
-        time_div_index++;
+        oscope_time_index++;
     }
 
 
+    /*
+     * Redraw current captured block
+     * with the new exact time window.
+     */
     OscopePage_DrawLastSamples();
 }
 
@@ -1079,9 +1278,9 @@ void OscopePage_TimeIncrease(void)
 
 void OscopePage_TimeDecrease(void)
 {
-    if (time_div_index > 0U)
+    if (oscope_time_index > 0U)
     {
-        time_div_index--;
+        oscope_time_index--;
     }
 
 
@@ -1095,10 +1294,12 @@ void OscopePage_TimeDecrease(void)
 
 void OscopePage_VoltIncrease(void)
 {
-    if (volt_div_index <
-        VOLT_DIV_COUNT - 1U)
+    if (
+        oscope_volt_index <
+        (OSCOPE_VOLT_DIV_COUNT - 1U)
+    )
     {
-        volt_div_index++;
+        oscope_volt_index++;
     }
 
 
@@ -1112,9 +1313,9 @@ void OscopePage_VoltIncrease(void)
 
 void OscopePage_VoltDecrease(void)
 {
-    if (volt_div_index > 0U)
+    if (oscope_volt_index > 0U)
     {
-        volt_div_index--;
+        oscope_volt_index--;
     }
 
 
@@ -1128,24 +1329,33 @@ void OscopePage_VoltDecrease(void)
 
 void OscopePage_TriggerIncrease(void)
 {
-    uint32_t value;
+    uint32_t new_level;
 
 
-    value =
-        (uint32_t)trigger_level_adc +
-        TRIGGER_STEP_ADC;
+    new_level =
+        (uint32_t)
+        oscope_trigger_level +
+        OSCOPE_TRIGGER_STEP;
 
 
-    if (value > TRIGGER_MAX_ADC)
+    if (
+        new_level >
+        OSCOPE_TRIGGER_MAX
+    )
     {
-        value = TRIGGER_MAX_ADC;
+        new_level =
+            OSCOPE_TRIGGER_MAX;
     }
 
 
-    trigger_level_adc =
-        (uint16_t)value;
+    oscope_trigger_level =
+        (uint16_t)new_level;
 
 
+    /*
+     * Redraw immediately so the effect
+     * of Trigger + is visible.
+     */
     OscopePage_DrawLastSamples();
 }
 
@@ -1156,22 +1366,28 @@ void OscopePage_TriggerIncrease(void)
 
 void OscopePage_TriggerDecrease(void)
 {
-    int32_t value;
+    int32_t new_level;
 
 
-    value =
-        (int32_t)trigger_level_adc -
-        (int32_t)TRIGGER_STEP_ADC;
+    new_level =
+        (int32_t)
+        oscope_trigger_level -
+        (int32_t)
+        OSCOPE_TRIGGER_STEP;
 
 
-    if (value < TRIGGER_MIN_ADC)
+    if (
+        new_level <
+        OSCOPE_TRIGGER_MIN
+    )
     {
-        value = TRIGGER_MIN_ADC;
+        new_level =
+            OSCOPE_TRIGGER_MIN;
     }
 
 
-    trigger_level_adc =
-        (uint16_t)value;
+    oscope_trigger_level =
+        (uint16_t)new_level;
 
 
     OscopePage_DrawLastSamples();
@@ -1195,9 +1411,7 @@ void OscopePage_ToggleRunStop(void)
         status =
             OscopeADC_Stop();
 
-
         (void)status;
-
 
         oscope_running = false;
     }
