@@ -4,6 +4,12 @@
   * @file           : main.c
   * @brief          : Main program body
   ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  ******************************************************************************
   */
 /* USER CODE END Header */
 
@@ -13,11 +19,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "lvgl.h"
-#include "LCDController.h"
-#include "TouchController.h"
-#include "ui/ui.h"
-#include "PersianText.h"
+#include "Application.h"
 
 /* USER CODE END Includes */
 
@@ -29,8 +31,6 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define LVGL_TASK_PERIOD_MS    5U
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -40,9 +40,17 @@
 
 /* Private variables ---------------------------------------------------------*/
 
-SPI_HandleTypeDef hspi1;
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
+I2C_HandleTypeDef hi2c1;
+
+SPI_HandleTypeDef hspi1;
 DMA_HandleTypeDef hdma_spi1_tx;
+
+TIM_HandleTypeDef htim2;
+
+UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
@@ -53,8 +61,12 @@ DMA_HandleTypeDef hdma_spi1_tx;
 void SystemClock_Config(void);
 
 static void MX_GPIO_Init(void);
-
+static void MX_DMA_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_I2C1_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_TIM2_Init(void);
 
 /* USER CODE BEGIN PFP */
 
@@ -75,17 +87,12 @@ int main(void)
 
     /* USER CODE END 1 */
 
-    /* MCU Configuration--------------------------------------------------------*/
-
     HAL_Init();
 
     /* USER CODE BEGIN Init */
 
     /* USER CODE END Init */
 
-    /*
-     * Configure system clock.
-     */
     SystemClock_Config();
 
     /* USER CODE BEGIN SysInit */
@@ -93,52 +100,21 @@ int main(void)
     /* USER CODE END SysInit */
 
     /*
-     * Initialize GPIO.
+     * Keep the original peripheral initialization order.
+     *
+     * This is important for the existing LCD/SPI system.
      */
     MX_GPIO_Init();
-
-    /*
-     * Initialize SPI1 + DMA.
-     */
+    MX_DMA_Init();
     MX_SPI1_Init();
+    MX_I2C1_Init();
+    MX_USART1_UART_Init();
+    MX_ADC1_Init();
+    MX_TIM2_Init();
 
     /* USER CODE BEGIN 2 */
 
-    /* ---------------------------------------------------------------------- */
-    /* LVGL                                                                    */
-    /* ---------------------------------------------------------------------- */
-
-    lv_init();
-
-    /* ---------------------------------------------------------------------- */
-    /* LCD                                                                      */
-    /* ---------------------------------------------------------------------- */
-
-    lv_port_disp_init();
-
-    /* ---------------------------------------------------------------------- */
-    /* XPT2046                                                                  */
-    /* ---------------------------------------------------------------------- */
-
-    XPT2046_Init(
-        &hspi1,
-        TCS_GPIO_Port,
-        TCS_Pin
-    );
-
-    XPT2046_LVGL_Init();
-
-    /* ---------------------------------------------------------------------- */
-    /* EEZ Studio UI                                                           */
-    /* ---------------------------------------------------------------------- */
-
-    ui_init();
-    PersianText_Init();
-
-    /*
-     * Force first screen rendering.
-     */
-    lv_refr_now(NULL);
+    Application_Init();
 
     /* USER CODE END 2 */
 
@@ -147,36 +123,16 @@ int main(void)
 
     while (1)
     {
-        /*
-         * EEZ generated screen tick.
-         */
-        ui_tick();
+        Application_Run();
 
-        /*
-         * LVGL:
-         *
-         * - input processing
-         * - timers
-         * - animations
-         * - rendering
-         * - LCD DMA flush
-         */
-        lv_timer_handler();
+        /* USER CODE END WHILE */
 
-        /*
-         * Small delay.
-         */
-        HAL_Delay(
-            LVGL_TASK_PERIOD_MS
-        );
+        /* USER CODE BEGIN 3 */
     }
-
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
 
     /* USER CODE END 3 */
 }
+
 
 /**
   * @brief System Clock Configuration
@@ -184,14 +140,11 @@ int main(void)
   */
 void SystemClock_Config(void)
 {
-    RCC_OscInitTypeDef RCC_OscInitStruct =
-        {0};
-
-    RCC_ClkInitTypeDef RCC_ClkInitStruct =
-        {0};
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
     /*
-     * Power
+     * Enable PWR clock.
      */
     __HAL_RCC_PWR_CLK_ENABLE();
 
@@ -205,7 +158,6 @@ void SystemClock_Config(void)
      * PLLM = 8
      * PLLN = 168
      * PLLP = 2
-     * PLLQ = 4
      *
      * SYSCLK = 168 MHz
      */
@@ -224,17 +176,10 @@ void SystemClock_Config(void)
     RCC_OscInitStruct.PLL.PLLSource =
         RCC_PLLSOURCE_HSI;
 
-    RCC_OscInitStruct.PLL.PLLM =
-        8;
-
-    RCC_OscInitStruct.PLL.PLLN =
-        168;
-
-    RCC_OscInitStruct.PLL.PLLP =
-        RCC_PLLP_DIV2;
-
-    RCC_OscInitStruct.PLL.PLLQ =
-        4;
+    RCC_OscInitStruct.PLL.PLLM = 8;
+    RCC_OscInitStruct.PLL.PLLN = 168;
+    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+    RCC_OscInitStruct.PLL.PLLQ = 4;
 
     if (
         HAL_RCC_OscConfig(
@@ -246,10 +191,12 @@ void SystemClock_Config(void)
     }
 
     /*
-     * SYSCLK = 168 MHz
-     * HCLK   = 168 MHz
-     * APB1   = 42 MHz
-     * APB2   = 84 MHz
+     * CPU  = 168 MHz
+     * APB1 = 42 MHz
+     * APB2 = 84 MHz
+     *
+     * Since APB1 prescaler != 1,
+     * TIM2 timer clock = 84 MHz.
      */
     RCC_ClkInitStruct.ClockType =
         RCC_CLOCKTYPE_HCLK |
@@ -280,6 +227,177 @@ void SystemClock_Config(void)
     }
 }
 
+
+/**
+  * @brief ADC1 Initialization Function
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+    ADC_ChannelConfTypeDef sConfig = {0};
+
+    /*
+     * ADC1
+     */
+    hadc1.Instance =
+        ADC1;
+
+    /*
+     * ADC clock:
+     *
+     * PCLK2 = 84 MHz
+     * ADC clock = 84 / 4 = 21 MHz
+     */
+    hadc1.Init.ClockPrescaler =
+        ADC_CLOCK_SYNC_PCLK_DIV4;
+
+    /*
+     * 12-bit ADC
+     */
+    hadc1.Init.Resolution =
+        ADC_RESOLUTION_12B;
+
+    /*
+     * Single channel
+     */
+    hadc1.Init.ScanConvMode =
+        DISABLE;
+
+    /*
+     * IMPORTANT:
+     *
+     * Continuous mode must be DISABLED.
+     *
+     * Each conversion is started by
+     * TIM2 TRGO.
+     */
+    hadc1.Init.ContinuousConvMode =
+        DISABLE;
+
+    hadc1.Init.DiscontinuousConvMode =
+        DISABLE;
+
+    /*
+     * TIM2 TRGO -> ADC trigger
+     *
+     * TIM2 update frequency:
+     *
+     * 84 MHz / (419 + 1)
+     * = 200 kHz
+     */
+    hadc1.Init.ExternalTrigConvEdge =
+        ADC_EXTERNALTRIGCONVEDGE_RISING;
+
+    hadc1.Init.ExternalTrigConv =
+        ADC_EXTERNALTRIGCONV_T2_TRGO;
+
+    /*
+     * Right aligned
+     */
+    hadc1.Init.DataAlign =
+        ADC_DATAALIGN_RIGHT;
+
+    /*
+     * One conversion
+     */
+    hadc1.Init.NbrOfConversion =
+        1;
+
+    /*
+     * DMA must continue requesting data.
+     */
+    hadc1.Init.DMAContinuousRequests =
+        ENABLE;
+
+    /*
+     * End of each conversion
+     */
+    hadc1.Init.EOCSelection =
+        ADC_EOC_SINGLE_CONV;
+
+    if (
+        HAL_ADC_Init(
+            &hadc1
+        ) != HAL_OK
+    )
+    {
+        Error_Handler();
+    }
+
+    /*
+     * PC2 = ADC1_IN12
+     */
+    sConfig.Channel =
+        ADC_CHANNEL_12;
+
+    sConfig.Rank =
+        1;
+
+    /*
+     * 15 ADC cycles.
+     *
+     * With ADC clock = 21 MHz this is
+     * suitable for this test source.
+     */
+    sConfig.SamplingTime =
+        ADC_SAMPLETIME_15CYCLES;
+
+    if (
+        HAL_ADC_ConfigChannel(
+            &hadc1,
+            &sConfig
+        ) != HAL_OK
+    )
+    {
+        Error_Handler();
+    }
+}
+
+
+/**
+  * @brief I2C1 Initialization Function
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+    hi2c1.Instance =
+        I2C1;
+
+    hi2c1.Init.ClockSpeed =
+        100000;
+
+    hi2c1.Init.DutyCycle =
+        I2C_DUTYCYCLE_2;
+
+    hi2c1.Init.OwnAddress1 =
+        0;
+
+    hi2c1.Init.AddressingMode =
+        I2C_ADDRESSINGMODE_7BIT;
+
+    hi2c1.Init.DualAddressMode =
+        I2C_DUALADDRESS_DISABLE;
+
+    hi2c1.Init.OwnAddress2 =
+        0;
+
+    hi2c1.Init.GeneralCallMode =
+        I2C_GENERALCALL_DISABLE;
+
+    hi2c1.Init.NoStretchMode =
+        I2C_NOSTRETCH_DISABLE;
+
+    if (
+        HAL_I2C_Init(
+            &hi2c1
+        ) != HAL_OK
+    )
+    {
+        Error_Handler();
+    }
+}
+
+
 /**
   * @brief SPI1 Initialization Function
   * @retval None
@@ -289,55 +407,27 @@ static void MX_SPI1_Init(void)
     hspi1.Instance =
         SPI1;
 
-    /*
-     * Master
-     */
     hspi1.Init.Mode =
         SPI_MODE_MASTER;
 
-    /*
-     * Full duplex
-     */
     hspi1.Init.Direction =
         SPI_DIRECTION_2LINES;
 
-    /*
-     * 8-bit
-     */
     hspi1.Init.DataSize =
         SPI_DATASIZE_8BIT;
 
-    /*
-     * SPI Mode 0
-     */
     hspi1.Init.CLKPolarity =
         SPI_POLARITY_LOW;
 
     hspi1.Init.CLKPhase =
         SPI_PHASE_1EDGE;
 
-    /*
-     * Software NSS
-     */
     hspi1.Init.NSS =
         SPI_NSS_SOFT;
 
-    /*
-     * APB2 = 84 MHz
-     *
-     * 84 / 8 = 10.5 MHz
-     *
-     * Used by ILI9341.
-     *
-     * XPT2046 temporarily changes this
-     * to prescaler 64.
-     */
     hspi1.Init.BaudRatePrescaler =
         SPI_BAUDRATEPRESCALER_2;
 
-    /*
-     * MSB first
-     */
     hspi1.Init.FirstBit =
         SPI_FIRSTBIT_MSB;
 
@@ -360,72 +450,256 @@ static void MX_SPI1_Init(void)
     }
 }
 
+
+/**
+  * @brief TIM2 Initialization Function
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+    TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+    TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+    /*
+     * TIM2 timer clock:
+     *
+     * APB1 = 42 MHz
+     * Timer clock = 84 MHz
+     *
+     * PSC = 0
+     * ARR = 419
+     *
+     * 84 MHz / (419 + 1)
+     * = 200 kHz
+     *
+     * Therefore one ADC trigger every 5 us.
+     */
+    htim2.Instance =
+        TIM2;
+
+    htim2.Init.Prescaler =
+        0;
+
+    htim2.Init.CounterMode =
+        TIM_COUNTERMODE_UP;
+
+    htim2.Init.Period =
+        419;
+
+    htim2.Init.ClockDivision =
+        TIM_CLOCKDIVISION_DIV1;
+
+    htim2.Init.AutoReloadPreload =
+        TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+    if (
+        HAL_TIM_Base_Init(
+            &htim2
+        ) != HAL_OK
+    )
+    {
+        Error_Handler();
+    }
+
+    /*
+     * Internal timer clock
+     */
+    sClockSourceConfig.ClockSource =
+        TIM_CLOCKSOURCE_INTERNAL;
+
+    if (
+        HAL_TIM_ConfigClockSource(
+            &htim2,
+            &sClockSourceConfig
+        ) != HAL_OK
+    )
+    {
+        Error_Handler();
+    }
+
+    /*
+     * TIM2 Update Event -> TRGO
+     *
+     * ADC uses this as its external trigger.
+     */
+    sMasterConfig.MasterOutputTrigger =
+        TIM_TRGO_UPDATE;
+
+    sMasterConfig.MasterSlaveMode =
+        TIM_MASTERSLAVEMODE_DISABLE;
+
+    if (
+        HAL_TIMEx_MasterConfigSynchronization(
+            &htim2,
+            &sMasterConfig
+        ) != HAL_OK
+    )
+    {
+        Error_Handler();
+    }
+}
+
+
+/**
+  * @brief USART1 Initialization Function
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+    huart1.Instance =
+        USART1;
+
+    huart1.Init.BaudRate =
+        115200;
+
+    huart1.Init.WordLength =
+        UART_WORDLENGTH_8B;
+
+    huart1.Init.StopBits =
+        UART_STOPBITS_1;
+
+    huart1.Init.Parity =
+        UART_PARITY_NONE;
+
+    huart1.Init.Mode =
+        UART_MODE_TX_RX;
+
+    huart1.Init.HwFlowCtl =
+        UART_HWCONTROL_NONE;
+
+    huart1.Init.OverSampling =
+        UART_OVERSAMPLING_16;
+
+    if (
+        HAL_UART_Init(
+            &huart1
+        ) != HAL_OK
+    )
+    {
+        Error_Handler();
+    }
+}
+
+
+/**
+  * @brief Enable DMA controller clock
+  * @retval None
+  */
+static void MX_DMA_Init(void)
+{
+    /*
+     * Enable DMA2 clock.
+     *
+     * DMA2 is used by:
+     *
+     * Stream0 -> ADC1
+     * Stream3 -> SPI1 TX
+     */
+    __HAL_RCC_DMA2_CLK_ENABLE();
+
+    /*
+     * ------------------------------------------------------
+     * ADC1 DMA
+     * ------------------------------------------------------
+     *
+     * ADC1 -> DMA2 Stream0
+     */
+    HAL_NVIC_SetPriority(
+        DMA2_Stream0_IRQn,
+        0,
+        0
+    );
+
+    HAL_NVIC_EnableIRQ(
+        DMA2_Stream0_IRQn
+    );
+
+    /*
+     * ------------------------------------------------------
+     * SPI1 TX DMA
+     * ------------------------------------------------------
+     */
+    HAL_NVIC_SetPriority(
+        DMA2_Stream3_IRQn,
+        0,
+        0
+    );
+
+    HAL_NVIC_EnableIRQ(
+        DMA2_Stream3_IRQn
+    );
+}
+
+
 /**
   * @brief GPIO Initialization Function
   * @retval None
   */
 static void MX_GPIO_Init(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct =
-        {0};
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
 
     /*
-     * ----------------------------------------------------------------------
      * GPIO clocks
-     * ----------------------------------------------------------------------
      */
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-
+    __HAL_RCC_GPIOH_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
-
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOE_CLK_ENABLE();
 
     /*
-     * ----------------------------------------------------------------------
-     * Initial LCD states
-     * ----------------------------------------------------------------------
-     *
-     * CS    = HIGH
-     * RESET = HIGH
-     * DC    = HIGH
-     *
-     * Touch CS = HIGH
+     * LCD DC
      */
     HAL_GPIO_WritePin(
-        GPIOB,
-        GPIO_PIN_0,
-        GPIO_PIN_SET
-    );
-
-    HAL_GPIO_WritePin(
-        GPIOB,
-        GPIO_PIN_1,
-        GPIO_PIN_SET
-    );
-
-    HAL_GPIO_WritePin(
-        GPIOC,
-        GPIO_PIN_5,
-        GPIO_PIN_SET
-    );
-
-    HAL_GPIO_WritePin(
-        GPIOE,
-        GPIO_PIN_9,
-        GPIO_PIN_SET
+        DC_GPIO_Port,
+        DC_Pin,
+        GPIO_PIN_RESET
     );
 
     /*
-     * ----------------------------------------------------------------------
-     * PB0 = LCD CS
-     * PB1 = LCD RESET
-     * ----------------------------------------------------------------------
+     * LCD CS + RESET
+     */
+    HAL_GPIO_WritePin(
+        GPIOB,
+        CS_Pin | RESET_Pin,
+        GPIO_PIN_RESET
+    );
+
+    /*
+     * Touch CS
+     */
+    HAL_GPIO_WritePin(
+        TCS_GPIO_Port,
+        TCS_Pin,
+        GPIO_PIN_RESET
+    );
+
+    /*
+     * DC
      */
     GPIO_InitStruct.Pin =
-        GPIO_PIN_0 |
-        GPIO_PIN_1;
+        DC_Pin;
+
+    GPIO_InitStruct.Mode =
+        GPIO_MODE_OUTPUT_PP;
+
+    GPIO_InitStruct.Pull =
+        GPIO_NOPULL;
+
+    GPIO_InitStruct.Speed =
+        GPIO_SPEED_FREQ_LOW;
+
+    HAL_GPIO_Init(
+        DC_GPIO_Port,
+        &GPIO_InitStruct
+    );
+
+    /*
+     * LCD CS + RESET
+     */
+    GPIO_InitStruct.Pin =
+        CS_Pin | RESET_Pin;
 
     GPIO_InitStruct.Mode =
         GPIO_MODE_OUTPUT_PP;
@@ -442,12 +716,10 @@ static void MX_GPIO_Init(void)
     );
 
     /*
-     * ----------------------------------------------------------------------
-     * PC5 = LCD DC
-     * ----------------------------------------------------------------------
+     * Touch CS
      */
     GPIO_InitStruct.Pin =
-        GPIO_PIN_5;
+        TCS_Pin;
 
     GPIO_InitStruct.Mode =
         GPIO_MODE_OUTPUT_PP;
@@ -459,32 +731,16 @@ static void MX_GPIO_Init(void)
         GPIO_SPEED_FREQ_LOW;
 
     HAL_GPIO_Init(
-        GPIOC,
-        &GPIO_InitStruct
-    );
-
-    /*
-     * ----------------------------------------------------------------------
-     * PE9 = XPT2046 TCS
-     * ----------------------------------------------------------------------
-     */
-    GPIO_InitStruct.Pin =
-        GPIO_PIN_9;
-
-    GPIO_InitStruct.Mode =
-        GPIO_MODE_OUTPUT_PP;
-
-    GPIO_InitStruct.Pull =
-        GPIO_NOPULL;
-
-    GPIO_InitStruct.Speed =
-        GPIO_SPEED_FREQ_LOW;
-
-    HAL_GPIO_Init(
-        GPIOE,
+        TCS_GPIO_Port,
         &GPIO_InitStruct
     );
 }
+
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
 
 /**
   * @brief  This function is executed in case of error occurrence.
@@ -499,11 +755,13 @@ void Error_Handler(void)
     }
 }
 
+
 #ifdef USE_FULL_ASSERT
 
 void assert_failed(
     uint8_t *file,
-    uint32_t line)
+    uint32_t line
+)
 {
     (void)file;
     (void)line;
