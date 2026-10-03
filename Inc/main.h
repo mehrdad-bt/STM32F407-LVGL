@@ -7,6 +7,7 @@
   */
 /* USER CODE END Header */
 
+/* Define to prevent recursive inclusion -------------------------------------*/
 #ifndef __MAIN_H
 #define __MAIN_H
 
@@ -14,6 +15,7 @@
 extern "C" {
 #endif
 
+/* Includes ------------------------------------------------------------------*/
 #include "stm32f4xx_hal.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -31,13 +33,12 @@ extern "C" {
 
 /* USER CODE END EC */
 
-/* Exported macro -------------------------------------------------------------*/
+/* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
 
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
-
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
@@ -45,15 +46,14 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-
-#define DC_Pin             GPIO_PIN_5
-#define DC_GPIO_Port       GPIOC
-
-#define CS_Pin             GPIO_PIN_0
-#define CS_GPIO_Port       GPIOB
-
-#define RESET_Pin          GPIO_PIN_1
-#define RESET_GPIO_Port    GPIOB
+#define DC_Pin GPIO_PIN_5
+#define DC_GPIO_Port GPIOC
+#define CS_Pin GPIO_PIN_0
+#define CS_GPIO_Port GPIOB
+#define RESET_Pin GPIO_PIN_1
+#define RESET_GPIO_Port GPIOB
+#define TCS_Pin GPIO_PIN_9
+#define TCS_GPIO_Port GPIOE
 
 /* USER CODE BEGIN Private defines */
 
