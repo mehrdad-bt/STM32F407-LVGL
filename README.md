@@ -1,1 +1,1 @@
-Osiloscope added
+Osiloscope added - edited internal adc
