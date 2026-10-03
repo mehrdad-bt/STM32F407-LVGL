@@ -17,35 +17,31 @@
  * ========================================================== */
 
 /*
- * تعداد نمونه‌ای که ADC در هر بلوک می‌گیرد.
- * باید با OscopeADC.h هماهنگ باشد.
+ * تعداد نمونه‌ای که ADC فعلی برمی‌گرداند.
  */
 #define OSCOPE_POINT_COUNT             300U
 
 /*
- * تعداد تقسیمات افقی و عمودی اسیلوسکوپ
+ * ADC 12-bit
  */
-#define OSCOPE_HORIZONTAL_DIVS         10U
+#define OSCOPE_ADC_MAX                4095U
+
+/*
+ * ولتاژ مرجع ADC
+ */
+#define OSCOPE_ADC_VOLTAGE             3.3f
+
+/*
+ * تعداد تقسیمات عمودی/افقی
+ */
 #define OSCOPE_VERTICAL_DIVS           8U
+#define OSCOPE_HORIZONTAL_DIVS        10U
 
 /*
- * نرخ تقریبی نمونه‌برداری فعلی.
- *
- * در حالت فعلی ADC با Polling کار می‌کند و نرخ دقیق سخت‌افزاری
- * مانند DMA + Timer نداریم. این مقدار برای تبدیل Time/Div
- * به تعداد نمونه استفاده می‌شود.
- *
- * با تنظیم فعلی ADC حدود 200 kSample/s را به عنوان مقدار کاری
- * در نظر می‌گیریم.
+ * موقعیت Trigger روی صفحه
+ * 25% یعنی Trigger کمی بعد از ابتدای صفحه دیده می‌شود.
  */
-#define OSCOPE_SAMPLE_RATE_HZ          200000UL
-
-/*
- * تعداد نمونه‌های قبل از Trigger
- *
- * Trigger در حدود 25% عرض صفحه قرار می‌گیرد.
- */
-#define OSCOPE_PRETRIGGER_PERCENT      25U
+#define OSCOPE_TRIGGER_POSITION        25U
 
 
 /* ==========================================================
@@ -53,37 +49,52 @@
  * ========================================================== */
 
 /*
- * Time/Div به میکروثانیه
+ * در این مرحله Time/Div بر اساس تعداد نمونه قابل نمایش
+ * روی همان بلوک 300 نمونه‌ای کنترل می‌شود.
  *
- * با نرخ تقریبی 200kHz:
+ * نرخ نمونه‌برداری فعلی با Polling سخت‌افزاری ثابت نشده،
+ * بنابراین این اعداد فعلاً SCALE نمایشی هستند.
  *
- * 20 us/div  -> حدود 40 نمونه
- * 50 us/div  -> حدود 100 نمونه
- * 100 us/div -> حدود 200 نمونه
- * 150 us/div -> حدود 300 نمونه
- *
- * فعلاً بالاتر از 150us/div نمی‌رویم چون با 300 نمونه
- * موجود، اطلاعات کافی برای نمایش واقعی آن نداریم.
+ * بعداً که ADC را TIM2 + DMA کنیم، همین جدول را می‌توان
+ * به Time/Div واقعی تبدیل کرد.
  */
-static const uint32_t time_div_values_us[] =
+static const uint32_t oscope_time_div_us[] =
 {
     20U,
     50U,
     100U,
-    150U
+    200U,
+    500U,
+    1000U
 };
 
-#define TIME_DIV_COUNT \
-    (sizeof(time_div_values_us) / sizeof(time_div_values_us[0]))
+#define OSCOPE_TIME_DIV_COUNT \
+    (sizeof(oscope_time_div_us) / sizeof(oscope_time_div_us[0]))
 
-static uint32_t time_div_index = 2U; /* default = 100us/div */
+static uint32_t oscope_time_index = 2U;
+
+
+/*
+ * تعداد نمونه قابل نمایش برای هر Time/Div
+ *
+ * فعلاً متناسب با بلوک 300 نمونه‌ای انتخاب شده.
+ */
+static const uint16_t oscope_samples_per_div[] =
+{
+    15U,
+    25U,
+    30U,
+    50U,
+    100U,
+    150U
+};
 
 
 /* ==========================================================
  * Volt / Division
  * ========================================================== */
 
-static const float volt_div_values[] =
+static const float oscope_volt_div[] =
 {
     0.1f,
     0.2f,
@@ -92,10 +103,10 @@ static const float volt_div_values[] =
     2.0f
 };
 
-#define VOLT_DIV_COUNT \
-    (sizeof(volt_div_values) / sizeof(volt_div_values[0]))
+#define OSCOPE_VOLT_DIV_COUNT \
+    (sizeof(oscope_volt_div) / sizeof(oscope_volt_div[0]))
 
-static uint32_t volt_div_index = 2U; /* default = 0.5V/div */
+static uint32_t oscope_volt_index = 2U;
 
 
 /* ==========================================================
@@ -103,23 +114,16 @@ static uint32_t volt_div_index = 2U; /* default = 0.5V/div */
  * ========================================================== */
 
 /*
- * Trigger بر حسب ADC Count
+ * Trigger به صورت ADC count نگهداری می‌شود.
  *
- * ADC:
- * 0V    -> 0
- * 3.3V  -> حدود 4095
+ * 0V   -> 0
+ * 3.3V -> 4095
  */
-#define ADC_MAX_VALUE                  4095U
-#define ADC_REFERENCE_VOLTAGE          3.3f
+#define OSCOPE_TRIGGER_MIN             128U
+#define OSCOPE_TRIGGER_MAX            3967U
+#define OSCOPE_TRIGGER_STEP            128U
 
-/*
- * حدود Trigger
- */
-#define TRIGGER_MIN_ADC                128U
-#define TRIGGER_MAX_ADC                3967U
-#define TRIGGER_STEP_ADC               124U
-
-static uint16_t trigger_level_adc = 2048U;
+static uint16_t oscope_trigger_level = 2048U;
 
 
 /* ==========================================================
@@ -130,16 +134,18 @@ static bool oscope_running = true;
 
 
 /* ==========================================================
- * LVGL objects
+ * LVGL
  * ========================================================== */
 
 static lv_timer_t *oscope_timer = NULL;
 
-static lv_obj_t *oscope_value_label = NULL;
+static lv_obj_t *oscope_info_label = NULL;
+
+static lv_chart_series_t *oscope_series = NULL;
 
 
 /* ==========================================================
- * Waveform buffers
+ * ADC buffers
  * ========================================================== */
 
 static uint16_t oscope_samples[OSCOPE_POINT_COUNT];
@@ -150,167 +156,235 @@ static uint16_t oscope_last_count = 0U;
 
 
 /* ==========================================================
- * Forward declarations
+ * Internal functions
  * ========================================================== */
 
 static void OscopePage_ConfigureChart(void);
-static void OscopePage_UpdateLabel(void);
-static void OscopePage_UpdateRunStopButtonText(void);
+
+static void OscopePage_CreateInfoLabel(void);
+
+static void OscopePage_UpdateInfoLabel(void);
+
+static void OscopePage_UpdateRunStopButton(void);
 
 static uint16_t OscopePage_GetVisibleSampleCount(void);
 
-static uint16_t OscopePage_MapSampleToChart(uint16_t adc_value);
+static uint16_t OscopePage_AdcToChart(
+    uint16_t adc_value
+);
 
-static int OscopePage_FindTriggerIndex(
+static float OscopePage_AdcToVoltage(
+    uint16_t adc_value
+);
+
+static int OscopePage_FindTrigger(
     const uint16_t *samples,
     uint16_t count
 );
 
-static void OscopePage_RenderSamples(
+static void OscopePage_DrawSamples(
     const uint16_t *samples,
     uint16_t count
 );
 
-static void OscopePage_RenderLastSamples(void);
+static void OscopePage_DrawLastSamples(void);
 
-static void OscopePage_TimerCallback(lv_timer_t *timer);
+static void OscopePage_TimerCallback(
+    lv_timer_t *timer
+);
 
 
 /* ==========================================================
  * ADC -> Voltage
  * ========================================================== */
 
-static float OscopePage_AdcToVoltage(uint16_t adc)
+static float OscopePage_AdcToVoltage(
+    uint16_t adc_value
+)
 {
-    return ((float)adc * ADC_REFERENCE_VOLTAGE) /
-           (float)ADC_MAX_VALUE;
+    return
+        ((float)adc_value *
+         OSCOPE_ADC_VOLTAGE) /
+        (float)OSCOPE_ADC_MAX;
 }
 
 
 /* ==========================================================
- * Get visible sample count from Time/Div
+ * Get visible sample count
  * ========================================================== */
 
 static uint16_t OscopePage_GetVisibleSampleCount(void)
 {
-    uint32_t time_per_div_us;
-    uint32_t total_time_us;
-    uint32_t samples;
+    uint32_t samples_per_div;
+    uint32_t total_samples;
 
-    time_per_div_us = time_div_values_us[time_div_index];
+    samples_per_div =
+        oscope_samples_per_div[oscope_time_index];
 
-    total_time_us =
-        time_per_div_us * OSCOPE_HORIZONTAL_DIVS;
+    total_samples =
+        samples_per_div *
+        OSCOPE_HORIZONTAL_DIVS;
 
     /*
-     * samples =
-     *
-     * sample_rate * total_time
-     *
-     * Hz * us / 1,000,000
+     * بیشتر از تعداد نمونه موجود نمی‌خواهیم.
      */
-    samples =
-        (OSCOPE_SAMPLE_RATE_HZ * total_time_us) /
-        1000000UL;
-
-    if (samples < 10U)
+    if (total_samples > OSCOPE_POINT_COUNT)
     {
-        samples = 10U;
+        total_samples = OSCOPE_POINT_COUNT;
     }
 
-    if (samples > OSCOPE_POINT_COUNT)
+    /*
+     * حداقل مقدار منطقی.
+     */
+    if (total_samples < 20U)
     {
-        samples = OSCOPE_POINT_COUNT;
+        total_samples = 20U;
     }
 
-    return (uint16_t)samples;
+    return (uint16_t)total_samples;
 }
 
 
 /* ==========================================================
- * Convert ADC sample to chart coordinate
- * according to Volt/Div
+ * ADC -> Chart
+ *
+ * Volt/Div روی محدوده عمودی Chart اعمال می‌شود.
+ * مرکز صفحه = 1.65V
  * ========================================================== */
 
-static uint16_t OscopePage_MapSampleToChart(uint16_t adc_value)
+static uint16_t OscopePage_AdcToChart(
+    uint16_t adc_value
+)
 {
-    float volt_div;
-    float total_voltage_range;
-    float center_voltage;
     float sample_voltage;
+    float center_voltage;
 
-    float normalized;
+    float total_range;
+    float half_range;
+
+    float min_voltage;
+    float max_voltage;
+
+    float chart_ratio;
     float chart_value;
 
+
+    sample_voltage =
+        OscopePage_AdcToVoltage(
+            adc_value
+        );
+
+    center_voltage =
+        OSCOPE_ADC_VOLTAGE / 2.0f;
+
+    total_range =
+        oscope_volt_div[oscope_volt_index] *
+        (float)OSCOPE_VERTICAL_DIVS;
+
+    half_range =
+        total_range / 2.0f;
+
+    min_voltage =
+        center_voltage - half_range;
+
+    max_voltage =
+        center_voltage + half_range;
+
+
     /*
-     * 8 vertical divisions
+     * جلوگیری از تقسیم بر صفر.
      */
-    volt_div = volt_div_values[volt_div_index];
+    if (total_range <= 0.001f)
+    {
+        total_range = OSCOPE_ADC_VOLTAGE;
+        min_voltage = 0.0f;
+        max_voltage = OSCOPE_ADC_VOLTAGE;
+    }
 
-    total_voltage_range =
-        volt_div * (float)OSCOPE_VERTICAL_DIVS;
-
-    center_voltage = ADC_REFERENCE_VOLTAGE / 2.0f;
-
-    sample_voltage = OscopePage_AdcToVoltage(adc_value);
 
     /*
-     * تبدیل نسبت به مرکز
+     * خارج از محدوده پایین
      */
-    normalized =
-        (sample_voltage - center_voltage) /
-        total_voltage_range;
+    if (sample_voltage <= min_voltage)
+    {
+        return 0U;
+    }
+
 
     /*
-     * center of chart = 2047.5
+     * خارج از محدوده بالا
      */
+    if (sample_voltage >= max_voltage)
+    {
+        return OSCOPE_ADC_MAX;
+    }
+
+
+    chart_ratio =
+        (sample_voltage - min_voltage) /
+        total_range;
+
+
     chart_value =
-        2047.5f + (normalized * (float)ADC_MAX_VALUE);
+        chart_ratio *
+        (float)OSCOPE_ADC_MAX;
+
 
     if (chart_value < 0.0f)
     {
         chart_value = 0.0f;
     }
 
-    if (chart_value > (float)ADC_MAX_VALUE)
+    if (chart_value > (float)OSCOPE_ADC_MAX)
     {
-        chart_value = (float)ADC_MAX_VALUE;
+        chart_value =
+            (float)OSCOPE_ADC_MAX;
     }
+
 
     return (uint16_t)chart_value;
 }
 
 
 /* ==========================================================
- * Find rising trigger edge
+ * Find rising trigger
  * ========================================================== */
 
-static int OscopePage_FindTriggerIndex(
+static int OscopePage_FindTrigger(
     const uint16_t *samples,
     uint16_t count
 )
 {
     uint16_t i;
 
-    if (samples == NULL || count < 2U)
+    if (samples == NULL)
     {
         return -1;
     }
 
+    if (count < 2U)
+    {
+        return -1;
+    }
+
+
     /*
      * Rising edge:
      *
-     * sample[i-1] < trigger
-     * sample[i]   >= trigger
+     * previous < trigger
+     * current  >= trigger
      */
     for (i = 1U; i < count; i++)
     {
-        if (samples[i - 1U] < trigger_level_adc &&
-            samples[i] >= trigger_level_adc)
+        if (samples[i - 1U] <
+                oscope_trigger_level &&
+            samples[i] >=
+                oscope_trigger_level)
         {
             return (int)i;
         }
     }
+
 
     return -1;
 }
@@ -327,131 +401,188 @@ static void OscopePage_ConfigureChart(void)
         return;
     }
 
+
     lv_chart_set_type(
         objects.chart_oscope,
         LV_CHART_TYPE_LINE
     );
+
 
     lv_chart_set_point_count(
         objects.chart_oscope,
         OSCOPE_POINT_COUNT
     );
 
+
     lv_chart_set_range(
         objects.chart_oscope,
         LV_CHART_AXIS_PRIMARY_Y,
         0,
-        ADC_MAX_VALUE
+        OSCOPE_ADC_MAX
     );
 
+
+    /*
+     * هر بار sample جدید وارد شود،
+     * نمودار به صورت Shift حرکت می‌کند.
+     */
     lv_chart_set_update_mode(
         objects.chart_oscope,
         LV_CHART_UPDATE_MODE_SHIFT
     );
 
+
     /*
-     * حذف نقطه‌های کوچک روی waveform
+     * نقاط کوچک روی waveform حذف شوند.
      */
     lv_obj_set_style_size(
         objects.chart_oscope,
         0,
         LV_PART_INDICATOR
     );
+
+
+    /*
+     * Series فقط یک بار ساخته شود.
+     */
+    if (oscope_series == NULL)
+    {
+        oscope_series =
+            lv_chart_add_series(
+                objects.chart_oscope,
+                lv_palette_main(LV_PALETTE_RED),
+                LV_CHART_AXIS_PRIMARY_Y
+            );
+    }
 }
 
 
 /* ==========================================================
- * Create value/settings label
+ * Create information label
  * ========================================================== */
 
-static void OscopePage_CreateLabel(void)
+static void OscopePage_CreateInfoLabel(void)
 {
-    if (oscope_value_label != NULL)
+    if (oscope_info_label != NULL)
     {
         return;
     }
+
 
     if (objects.osilloscop == NULL)
     {
         return;
     }
 
-    oscope_value_label = lv_label_create(objects.osilloscop);
 
-    if (oscope_value_label == NULL)
+    oscope_info_label =
+        lv_label_create(
+            objects.osilloscop
+        );
+
+
+    if (oscope_info_label == NULL)
     {
         return;
     }
 
+
+    /*
+     * داخل محدوده بالای Chart
+     */
     lv_obj_set_pos(
-        oscope_value_label,
-        15,
-        14
+        oscope_info_label,
+        16,
+        12
     );
 
+
     lv_obj_set_size(
-        oscope_value_label,
+        oscope_info_label,
         285,
         LV_SIZE_CONTENT
     );
 
+
     lv_obj_set_style_text_color(
-        oscope_value_label,
+        oscope_info_label,
         lv_color_white(),
         LV_PART_MAIN | LV_STATE_DEFAULT
     );
 
+
     lv_obj_set_style_text_font(
-        oscope_value_label,
+        oscope_info_label,
         &lv_font_montserrat_12,
         LV_PART_MAIN | LV_STATE_DEFAULT
     );
 
+
     lv_label_set_text(
-        oscope_value_label,
-        "ADC:---- MIN:---- MAX:----\n"
-        "T:100us V:0.5V TR:1.65V RUN"
+        oscope_info_label,
+        "ADC:---- MIN:---- MAX:----"
     );
 }
 
 
 /* ==========================================================
- * Update value/settings label
+ * Update information label
  * ========================================================== */
 
-static void OscopePage_UpdateLabel(void)
+static void OscopePage_UpdateInfoLabel(void)
 {
-    char text[128];
-
-    uint16_t latest = 0U;
-    uint16_t min_value = ADC_MAX_VALUE;
-    uint16_t max_value = 0U;
+    uint16_t latest;
+    uint16_t min_value;
+    uint16_t max_value;
 
     uint16_t i;
 
     float trigger_voltage;
 
+    char text[128];
+
     const char *run_text;
 
-    if (oscope_value_label == NULL)
+
+    if (oscope_info_label == NULL)
     {
         return;
     }
 
+
+    latest = 0U;
+
+    min_value =
+        OSCOPE_ADC_MAX;
+
+    max_value = 0U;
+
+
     if (oscope_last_count > 0U)
     {
-        latest = oscope_last_samples[oscope_last_count - 1U];
+        latest =
+            oscope_last_samples[
+                oscope_last_count - 1U
+            ];
 
-        for (i = 0U; i < oscope_last_count; i++)
+
+        for (i = 0U;
+             i < oscope_last_count;
+             i++)
         {
-            if (oscope_last_samples[i] < min_value)
+            if (oscope_last_samples[i] <
+                    min_value)
             {
-                min_value = oscope_last_samples[i];
+                min_value =
+                    oscope_last_samples[i];
             }
 
-            if (oscope_last_samples[i] > max_value)
+
+            if (oscope_last_samples[i] >
+                    max_value)
             {
-                max_value = oscope_last_samples[i];
+                max_value =
+                    oscope_last_samples[i];
             }
         }
     }
@@ -461,59 +592,87 @@ static void OscopePage_UpdateLabel(void)
         max_value = 0U;
     }
 
-    trigger_voltage =
-        OscopePage_AdcToVoltage(trigger_level_adc);
 
-    run_text =
-        oscope_running ? "RUN" : "STOP";
+    trigger_voltage =
+        OscopePage_AdcToVoltage(
+            oscope_trigger_level
+        );
+
+
+    if (oscope_running)
+    {
+        run_text = "RUN";
+    }
+    else
+    {
+        run_text = "STOP";
+    }
+
 
     snprintf(
         text,
         sizeof(text),
+
         "ADC:%4u MIN:%4u MAX:%4u\n"
         "T:%luus V:%.1fV TR:%.2fV %s",
+
         latest,
         min_value,
         max_value,
-        (unsigned long)time_div_values_us[time_div_index],
-        (double)volt_div_values[volt_div_index],
+
+        (unsigned long)
+            oscope_time_div_us[
+                oscope_time_index
+            ],
+
+        (double)
+            oscope_volt_div[
+                oscope_volt_index
+            ],
+
         (double)trigger_voltage,
+
         run_text
     );
 
+
     lv_label_set_text(
-        oscope_value_label,
+        oscope_info_label,
         text
     );
 }
 
 
 /* ==========================================================
- * Update STOP/RUN button text
+ * Update STOP/RUN button
  * ========================================================== */
 
-static void OscopePage_UpdateRunStopButtonText(void)
+static void OscopePage_UpdateRunStopButton(void)
 {
     lv_obj_t *label;
+
 
     if (objects.stop_run_btn == NULL)
     {
         return;
     }
 
+
     /*
-     * در screen.c این label اسم ندارد.
-     * اولین child دکمه همان label است.
+     * در screen.c تنها child این button همان label است.
      */
-    label = lv_obj_get_child(
-        objects.stop_run_btn,
-        0
-    );
+    label =
+        lv_obj_get_child(
+            objects.stop_run_btn,
+            0
+        );
+
 
     if (label == NULL)
     {
         return;
     }
+
 
     if (oscope_running)
     {
@@ -533,93 +692,95 @@ static void OscopePage_UpdateRunStopButtonText(void)
 
 
 /* ==========================================================
- * Render samples
+ * Draw samples
  * ========================================================== */
 
-static void OscopePage_RenderSamples(
+static void OscopePage_DrawSamples(
     const uint16_t *samples,
     uint16_t count
 )
 {
-    lv_chart_series_t *series;
-
     uint16_t visible_count;
+
+    uint16_t i;
 
     int trigger_index;
 
     int start_index;
 
-    uint16_t i;
 
     if (samples == NULL)
     {
         return;
     }
 
+
     if (count == 0U)
     {
         return;
     }
+
 
     if (objects.chart_oscope == NULL)
     {
         return;
     }
 
-    /*
-     * اگر series قبلاً ساخته نشده باشد، آن را بساز.
-     */
-    series = lv_chart_get_series_next(
-        objects.chart_oscope,
-        NULL
-    );
 
-    if (series == NULL)
+    if (oscope_series == NULL)
     {
-        series = lv_chart_add_series(
-            objects.chart_oscope,
-            lv_palette_main(LV_PALETTE_RED),
-            LV_CHART_AXIS_PRIMARY_Y
-        );
+        OscopePage_ConfigureChart();
     }
 
-    if (series == NULL)
+
+    if (oscope_series == NULL)
     {
         return;
     }
 
+
     visible_count =
         OscopePage_GetVisibleSampleCount();
+
+
+    if (visible_count > count)
+    {
+        visible_count = count;
+    }
+
 
     /*
      * پیدا کردن Trigger
      */
     trigger_index =
-        OscopePage_FindTriggerIndex(
+        OscopePage_FindTrigger(
             samples,
             count
         );
 
+
     if (trigger_index >= 0)
     {
         /*
-         * Trigger در 25 درصد اول صفحه قرار می‌گیرد.
+         * Trigger را روی حدود 25% صفحه قرار می‌دهیم.
          */
         start_index =
             trigger_index -
             (int)(
                 ((uint32_t)visible_count *
-                 OSCOPE_PRETRIGGER_PERCENT) /
+                 OSCOPE_TRIGGER_POSITION) /
                 100U
             );
 
+
         /*
-         * wrap
+         * Wrap
          */
         while (start_index < 0)
         {
             start_index += count;
         }
+
 
         while (start_index >= (int)count)
         {
@@ -629,49 +790,66 @@ static void OscopePage_RenderSamples(
     else
     {
         /*
-         * اگر Trigger پیدا نشد، از ابتدای بلوک استفاده می‌کنیم.
+         * Trigger پیدا نشد.
+         * از ابتدای بلوک نمایش می‌دهیم.
          */
         start_index = 0;
     }
 
+
     /*
-     * تمام نقاط قبلی پاک شوند.
+     * پاک کردن waveform قبلی
      */
     lv_chart_set_all_value(
         objects.chart_oscope,
-        series,
+        oscope_series,
         0
     );
 
+
     /*
-     * نقاط جدید
+     * وارد کردن waveform جدید
+     *
+     * بسیار مهم:
+     * از set_next_value استفاده می‌کنیم.
+     * همین روش در نسخه قبلی waveform را درست
+     * نشان می‌داد.
      */
-    for (i = 0U; i < visible_count; i++)
+    for (i = 0U;
+         i < visible_count;
+         i++)
     {
         uint16_t source_index;
         uint16_t chart_value;
 
+
         source_index =
             (uint16_t)(
-                (start_index + (int)i) %
-                (int)count
+                (
+                    start_index +
+                    (int)i
+                ) % (int)count
             );
 
+
         chart_value =
-            OscopePage_MapSampleToChart(
+            OscopePage_AdcToChart(
                 samples[source_index]
             );
 
+
         lv_chart_set_next_value(
             objects.chart_oscope,
-            series,
+            oscope_series,
             (lv_coord_t)chart_value
         );
     }
 
+
     lv_chart_refresh(
         objects.chart_oscope
     );
+
 
     lv_obj_invalidate(
         objects.chart_oscope
@@ -680,54 +858,72 @@ static void OscopePage_RenderSamples(
 
 
 /* ==========================================================
- * Render last captured block
+ * Draw last captured samples
  * ========================================================== */
 
-static void OscopePage_RenderLastSamples(void)
+static void OscopePage_DrawLastSamples(void)
 {
     if (oscope_last_count == 0U)
     {
+        OscopePage_UpdateInfoLabel();
         return;
     }
 
-    OscopePage_RenderSamples(
+
+    OscopePage_DrawSamples(
         oscope_last_samples,
         oscope_last_count
     );
 
-    OscopePage_UpdateLabel();
+
+    OscopePage_UpdateInfoLabel();
 }
 
 
 /* ==========================================================
- * Timer callback
+ * Timer
  * ========================================================== */
 
-static void OscopePage_TimerCallback(lv_timer_t *timer)
+static void OscopePage_TimerCallback(
+    lv_timer_t *timer
+)
 {
     HAL_StatusTypeDef status;
 
     uint16_t block_size;
 
+    uint16_t i;
+
+
     (void)timer;
 
+
+    /*
+     * در STOP دیگر ADC جدید نمی‌گیریم.
+     * آخرین waveform روی صفحه باقی می‌ماند.
+     */
     if (!oscope_running)
     {
         return;
     }
 
+
     block_size =
         OscopeADC_GetBlockSize();
+
 
     if (block_size == 0U)
     {
         return;
     }
 
+
     if (block_size > OSCOPE_POINT_COUNT)
     {
-        block_size = OSCOPE_POINT_COUNT;
+        block_size =
+            OSCOPE_POINT_COUNT;
     }
+
 
     status =
         OscopeADC_ReadSamples(
@@ -735,103 +931,115 @@ static void OscopePage_TimerCallback(lv_timer_t *timer)
             block_size
         );
 
+
     if (status != HAL_OK)
     {
         return;
     }
 
+
     /*
-     * آخرین بلوک را ذخیره می‌کنیم تا با تغییر تنظیمات
-     * بتوانیم بدون ADC مجدد آن را redraw کنیم.
+     * ذخیره آخرین بلوک
      */
-    for (uint16_t i = 0U; i < block_size; i++)
+    for (i = 0U;
+         i < block_size;
+         i++)
     {
         oscope_last_samples[i] =
             oscope_samples[i];
     }
 
-    oscope_last_count = block_size;
 
-    OscopePage_RenderSamples(
+    oscope_last_count =
+        block_size;
+
+
+    /*
+     * رسم waveform
+     */
+    OscopePage_DrawSamples(
         oscope_last_samples,
         oscope_last_count
     );
 
-    OscopePage_UpdateLabel();
+
+    /*
+     * بروزرسانی اطلاعات
+     */
+    OscopePage_UpdateInfoLabel();
 }
 
 
 /* ==========================================================
- * Page Enter
+ * Enter
  * ========================================================== */
 
 void OscopePage_OnEnter(void)
 {
-    lv_chart_series_t *series;
-
     /*
-     * تنظیمات اولیه
+     * تنظیمات اولیه هر بار ورود به صفحه
      */
-    time_div_index = 2U;   /* 100us/div */
-    volt_div_index = 2U;   /* 0.5V/div */
+    oscope_time_index = 2U;   /* 100 us/div */
 
-    trigger_level_adc = 2048U;
+    oscope_volt_index = 2U;   /* 0.5 V/div */
+
+    oscope_trigger_level = 2048U;
 
     oscope_running = true;
 
     oscope_last_count = 0U;
+
 
     /*
      * Chart
      */
     OscopePage_ConfigureChart();
 
+
     /*
-     * اگر series وجود ندارد، آن را بساز.
+     * پاک کردن نمودار
      */
-    series = lv_chart_get_series_next(
-        objects.chart_oscope,
-        NULL
-    );
-
-    if (series == NULL)
-    {
-        series = lv_chart_add_series(
-            objects.chart_oscope,
-            lv_palette_main(LV_PALETTE_RED),
-            LV_CHART_AXIS_PRIMARY_Y
-        );
-    }
-
-    if (series != NULL)
+    if (oscope_series != NULL)
     {
         lv_chart_set_all_value(
             objects.chart_oscope,
-            series,
+            oscope_series,
             0
         );
+
+
+        lv_chart_refresh(
+            objects.chart_oscope
+        );
     }
+
 
     /*
      * Label
      */
-    OscopePage_CreateLabel();
+    OscopePage_CreateInfoLabel();
 
-    OscopePage_UpdateRunStopButtonText();
-    OscopePage_UpdateLabel();
+    OscopePage_UpdateRunStopButton();
+
+    OscopePage_UpdateInfoLabel();
+
 
     /*
-     * Timer
-     *
-     * ADC polling خودش زمان‌بر است، بنابراین timer را
-     * خیلی سریع نمی‌گذاریم.
+     * Timer قبلی را حذف کنیم
      */
     if (oscope_timer != NULL)
     {
-        lv_timer_del(oscope_timer);
+        lv_timer_del(
+            oscope_timer
+        );
+
         oscope_timer = NULL;
     }
 
+
+    /*
+     * هر 30ms یک بلوک جدید.
+     */
     oscope_timer =
         lv_timer_create(
             OscopePage_TimerCallback,
@@ -842,22 +1050,30 @@ void OscopePage_OnEnter(void)
 
 
 /* ==========================================================
- * Page Exit
+ * Exit
  * ========================================================== */
 
 void OscopePage_OnExit(void)
 {
     if (oscope_timer != NULL)
     {
-        lv_timer_del(oscope_timer);
+        lv_timer_del(
+            oscope_timer
+        );
+
         oscope_timer = NULL;
     }
 
-    if (oscope_value_label != NULL)
+
+    if (oscope_info_label != NULL)
     {
-        lv_obj_del(oscope_value_label);
-        oscope_value_label = NULL;
+        lv_obj_del(
+            oscope_info_label
+        );
+
+        oscope_info_label = NULL;
     }
+
 
     oscope_running = false;
 }
@@ -869,17 +1085,18 @@ void OscopePage_OnExit(void)
 
 void OscopePage_TimeIncrease(void)
 {
-    if (time_div_index + 1U >= TIME_DIV_COUNT)
+    if (oscope_time_index <
+        (OSCOPE_TIME_DIV_COUNT - 1U))
     {
-        time_div_index =
-            TIME_DIV_COUNT - 1U;
-    }
-    else
-    {
-        time_div_index++;
+        oscope_time_index++;
     }
 
-    OscopePage_RenderLastSamples();
+
+    /*
+     * همان waveform آخر را با scale جدید
+     * دوباره رسم کن.
+     */
+    OscopePage_DrawLastSamples();
 }
 
 
@@ -889,12 +1106,13 @@ void OscopePage_TimeIncrease(void)
 
 void OscopePage_TimeDecrease(void)
 {
-    if (time_div_index > 0U)
+    if (oscope_time_index > 0U)
     {
-        time_div_index--;
+        oscope_time_index--;
     }
 
-    OscopePage_RenderLastSamples();
+
+    OscopePage_DrawLastSamples();
 }
 
 
@@ -904,17 +1122,14 @@ void OscopePage_TimeDecrease(void)
 
 void OscopePage_VoltIncrease(void)
 {
-    if (volt_div_index + 1U >= VOLT_DIV_COUNT)
+    if (oscope_volt_index <
+        (OSCOPE_VOLT_DIV_COUNT - 1U))
     {
-        volt_div_index =
-            VOLT_DIV_COUNT - 1U;
-    }
-    else
-    {
-        volt_div_index++;
+        oscope_volt_index++;
     }
 
-    OscopePage_RenderLastSamples();
+
+    OscopePage_DrawLastSamples();
 }
 
 
@@ -924,12 +1139,13 @@ void OscopePage_VoltIncrease(void)
 
 void OscopePage_VoltDecrease(void)
 {
-    if (volt_div_index > 0U)
+    if (oscope_volt_index > 0U)
     {
-        volt_div_index--;
+        oscope_volt_index--;
     }
 
-    OscopePage_RenderLastSamples();
+
+    OscopePage_DrawLastSamples();
 }
 
 
@@ -939,21 +1155,30 @@ void OscopePage_VoltDecrease(void)
 
 void OscopePage_TriggerIncrease(void)
 {
-    uint32_t new_value;
+    uint32_t new_level;
 
-    new_value =
-        (uint32_t)trigger_level_adc +
-        TRIGGER_STEP_ADC;
 
-    if (new_value > TRIGGER_MAX_ADC)
+    new_level =
+        (uint32_t)oscope_trigger_level +
+        OSCOPE_TRIGGER_STEP;
+
+
+    if (new_level > OSCOPE_TRIGGER_MAX)
     {
-        new_value = TRIGGER_MAX_ADC;
+        new_level =
+            OSCOPE_TRIGGER_MAX;
     }
 
-    trigger_level_adc =
-        (uint16_t)new_value;
 
-    OscopePage_RenderLastSamples();
+    oscope_trigger_level =
+        (uint16_t)new_level;
+
+
+    /*
+     * waveform فعلی را با Trigger جدید
+     * دوباره مرتب کن.
+     */
+    OscopePage_DrawLastSamples();
 }
 
 
@@ -963,21 +1188,26 @@ void OscopePage_TriggerIncrease(void)
 
 void OscopePage_TriggerDecrease(void)
 {
-    int32_t new_value;
+    int32_t new_level;
 
-    new_value =
-        (int32_t)trigger_level_adc -
-        (int32_t)TRIGGER_STEP_ADC;
 
-    if (new_value < TRIGGER_MIN_ADC)
+    new_level =
+        (int32_t)oscope_trigger_level -
+        (int32_t)OSCOPE_TRIGGER_STEP;
+
+
+    if (new_level < OSCOPE_TRIGGER_MIN)
     {
-        new_value = TRIGGER_MIN_ADC;
+        new_level =
+            OSCOPE_TRIGGER_MIN;
     }
 
-    trigger_level_adc =
-        (uint16_t)new_value;
 
-    OscopePage_RenderLastSamples();
+    oscope_trigger_level =
+        (uint16_t)new_level;
+
+
+    OscopePage_DrawLastSamples();
 }
 
 
@@ -990,6 +1220,28 @@ void OscopePage_ToggleRunStop(void)
     oscope_running =
         !oscope_running;
 
-    OscopePage_UpdateRunStopButtonText();
-    OscopePage_UpdateLabel();
+
+    OscopePage_UpdateRunStopButton();
+
+
+    OscopePage_UpdateInfoLabel();
+}
+
+
+/* ==========================================================
+ * Compatibility functions
+ *
+ * اگر جایی از پروژه هنوز این دو تابع قدیمی را صدا بزند،
+ * باعث خطای Link نمی‌شوند.
+ * ========================================================== */
+
+void OscopePage_IncreaseSpeed(void)
+{
+    OscopePage_TimeIncrease();
+}
+
+
+void OscopePage_DecreaseSpeed(void)
+{
+    OscopePage_TimeDecrease();
 }
