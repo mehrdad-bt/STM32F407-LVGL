@@ -63,24 +63,47 @@
  * TIME / DIV
  * ============================================================ */
 
-static const uint32_t time_div_us_table[] =
+/*
+ * Each Time/Div has its own ADC sample rate.
+ *
+ * Window = Time/Div x 10 divisions.
+ * Fast ranges use the maximum rate (700 kS/s) and the display
+ * is interpolated.
+ * Slow ranges lower the rate so that one 8192-sample block still
+ * covers the whole window (about 4000 samples per window).
+ */
+typedef struct
 {
-    1U,
-    2U,
-    5U,
-    10U,
-    20U,
-    50U,
-    100U,
-    200U,
-    500U,
-    1000U,
-    1500U
+    uint32_t time_div_us;
+
+    uint32_t sample_rate_hz;
+
+} time_div_cfg_t;
+
+
+static const time_div_cfg_t time_div_table[] =
+{
+    {      1U, 700000U },
+    {      2U, 700000U },
+    {      5U, 700000U },
+    {     10U, 700000U },
+    {     20U, 700000U },
+    {     50U, 700000U },
+    {    100U, 700000U },
+    {    200U, 700000U },
+    {    500U, 700000U },
+    {   1000U, 350000U },
+    {   2000U, 200000U },
+    {   5000U,  80000U },
+    {  10000U,  40000U },
+    {  20000U,  20000U },
+    {  50000U,   8000U },
+    { 100000U,   4000U }
 };
 
 #define TIME_DIV_COUNT \
-    (sizeof(time_div_us_table) / \
-     sizeof(time_div_us_table[0]))
+    (sizeof(time_div_table) / \
+     sizeof(time_div_table[0]))
 
 
 /* ============================================================
@@ -161,6 +184,8 @@ static uint32_t sweep_speed_index = 0U;
 #define OSCOPE_SWEEP_COLOR             0xFFAA44U
 #define OSCOPE_STATUS_COLOR            0xFFFFFFU
 #define OSCOPE_FREQ_COLOR              0xFF66FFU
+#define OSCOPE_VPP_COLOR               0xFFD966U
+#define OSCOPE_VRMS_COLOR              0x66FFCCU
 
 
 /* ============================================================
@@ -268,6 +293,36 @@ static uint32_t measured_freq_hz = 0U;
 
 static bool measured_freq_valid = false;
 
+/*
+ * true = few samples per period, value is less accurate ("~").
+ */
+static bool measured_freq_approx = false;
+
+
+/* ============================================================
+ * VOLTAGE MEASUREMENTS (mV)
+ * ============================================================ */
+
+static uint32_t meas_vpp_mv = 0U;
+
+static uint32_t meas_vrms_mv = 0U;
+
+
+/* ============================================================
+ * SAMPLE RATE STATE
+ * ============================================================ */
+
+/*
+ * Rate requested for the current Time/Div.
+ */
+static uint32_t applied_rate_hz = 0U;
+
+/*
+ * true while ADC runs but the first block at the
+ * new rate is not complete yet.
+ */
+static bool data_waiting = false;
+
 
 /* ============================================================
  * CHART SERIES
@@ -314,6 +369,12 @@ static lv_obj_t *oscope_status_label =
     NULL;
 
 static lv_obj_t *oscope_freq_label =
+    NULL;
+
+static lv_obj_t *oscope_vpp_label =
+    NULL;
+
+static lv_obj_t *oscope_vrms_label =
     NULL;
 
 
@@ -457,9 +518,9 @@ static uint32_t get_view_sample_count(void)
      * 10 horizontal divisions.
      */
     total_time_us =
-        time_div_us_table[
+        time_div_table[
             time_div_index
-        ]
+        ].time_div_us
         *
         10U;
 
@@ -506,12 +567,25 @@ static uint32_t get_view_sample_count(void)
 
 
 /* ============================================================
- * TRIGGER SEARCH
+ * TRIGGER SEARCH (sub-sample accuracy)
+ *
+ * Rising edge with hysteresis (Schmitt style):
+ *   - the trigger is armed after the signal was at or below
+ *     (level - hysteresis)
+ *   - it fires on the first sample at or above the level
+ *   - the crossing position is linearly interpolated between
+ *     the two samples, so it is a fractional index
+ *
+ * Only crossings inside [first_index, last_index] are accepted,
+ * so the whole display window fits inside the ADC block.
  * ============================================================ */
 
-static uint32_t find_trigger_index(
+static bool find_trigger_position(
     const uint16_t *samples,
-    uint32_t sample_count
+    uint32_t sample_count,
+    uint32_t first_index,
+    uint32_t last_index,
+    float *position
 )
 {
     uint32_t i;
@@ -520,21 +594,44 @@ static uint32_t find_trigger_index(
 
     uint16_t low_level;
 
+    bool armed;
+
 
     if (
-        samples == NULL
+        samples == NULL ||
+        position == NULL ||
+        sample_count < 2U
     )
     {
-        return 0U;
+        return false;
     }
 
 
     if (
-        sample_count <
-        2U
+        last_index >
+        sample_count - 1U
     )
     {
-        return 0U;
+        last_index =
+            sample_count - 1U;
+    }
+
+
+    if (
+        first_index < 1U
+    )
+    {
+        first_index =
+            1U;
+    }
+
+
+    if (
+        first_index >
+        last_index
+    )
+    {
+        return false;
     }
 
 
@@ -542,9 +639,6 @@ static uint32_t find_trigger_index(
         trigger_level;
 
 
-    /*
-     * Hysteresis.
-     */
     if (
         level >
         TRIGGER_HYSTERESIS
@@ -561,33 +655,385 @@ static uint32_t find_trigger_index(
     }
 
 
-    /*
-     * Rising edge trigger.
-     */
+    armed =
+        false;
+
+
     for (
         i = 1U;
-        i < sample_count;
+        i <= last_index;
         i++
     )
     {
         if (
             samples[i - 1U] <=
             low_level
-            &&
+        )
+        {
+            armed =
+                true;
+        }
+
+
+        if (
+            armed &&
             samples[i] >=
             level
         )
         {
-            return i;
+            armed =
+                false;
+
+
+            if (
+                i >= first_index
+            )
+            {
+                int32_t s0;
+                int32_t s1;
+                float frac;
+
+
+                s0 =
+                    (int32_t)samples[i - 1U];
+
+                s1 =
+                    (int32_t)samples[i];
+
+
+                if (
+                    s1 > s0
+                )
+                {
+                    frac =
+                        (float)((int32_t)level - s0)
+                        /
+                        (float)(s1 - s0);
+                }
+                else
+                {
+                    frac =
+                        1.0f;
+                }
+
+
+                if (
+                    frac < 0.0f
+                )
+                {
+                    frac =
+                        0.0f;
+                }
+
+
+                if (
+                    frac > 1.0f
+                )
+                {
+                    frac =
+                        1.0f;
+                }
+
+
+                *position =
+                    (float)(i - 1U)
+                    +
+                    frac;
+
+
+                return true;
+            }
         }
     }
 
 
-    /*
-     * No trigger found.
-     */
+    return false;
+}
+
+
+/* ============================================================
+ * CUBIC (CATMULL-ROM) INTERPOLATION
+ *
+ * Used when fewer ADC samples than screen points are visible
+ * (fast Time/Div). Gives a smooth curve instead of steps.
+ * ============================================================ */
+
+static float sample_at(
+    const uint16_t *samples,
+    uint32_t sample_count,
+    int32_t index
+)
+{
+    if (
+        index < 0
+    )
+    {
+        index =
+            0;
+    }
+
+
+    if (
+        index >
+        (int32_t)sample_count - 1
+    )
+    {
+        index =
+            (int32_t)sample_count - 1;
+    }
+
+
     return
-        sample_count / 2U;
+        (float)samples[index];
+}
+
+
+static float interpolate_cubic(
+    const uint16_t *samples,
+    uint32_t sample_count,
+    float position
+)
+{
+    int32_t i1;
+
+    float t;
+
+    float y0;
+    float y1;
+    float y2;
+    float y3;
+
+    float a;
+    float b;
+    float c;
+
+
+    if (
+        position < 0.0f
+    )
+    {
+        position =
+            0.0f;
+    }
+
+
+    i1 =
+        (int32_t)position;
+
+
+    t =
+        position -
+        (float)i1;
+
+
+    y0 =
+        sample_at(samples, sample_count, i1 - 1);
+
+    y1 =
+        sample_at(samples, sample_count, i1);
+
+    y2 =
+        sample_at(samples, sample_count, i1 + 1);
+
+    y3 =
+        sample_at(samples, sample_count, i1 + 2);
+
+
+    a =
+        -0.5f * y0 +
+         1.5f * y1 -
+         1.5f * y2 +
+         0.5f * y3;
+
+    b =
+         y0 -
+         2.5f * y1 +
+         2.0f * y2 -
+         0.5f * y3;
+
+    c =
+        -0.5f * y0 +
+         0.5f * y2;
+
+
+    return
+        (
+            (a * t + b) * t + c
+        )
+        * t
+        + y1;
+}
+
+
+/* ============================================================
+ * INTEGER SQUARE ROOT
+ * ============================================================ */
+
+static uint32_t isqrt64(
+    uint64_t x
+)
+{
+    uint64_t res;
+    uint64_t bit;
+
+
+    res =
+        0ULL;
+
+    bit =
+        1ULL << 62;
+
+
+    while (
+        bit > x
+    )
+    {
+        bit >>= 2;
+    }
+
+
+    while (
+        bit != 0ULL
+    )
+    {
+        if (
+            x >= res + bit
+        )
+        {
+            x -= res + bit;
+
+            res =
+                (res >> 1) + bit;
+        }
+        else
+        {
+            res >>= 1;
+        }
+
+
+        bit >>= 2;
+    }
+
+
+    return
+        (uint32_t)res;
+}
+
+
+/* ============================================================
+ * VOLTAGE STATISTICS (Vpp, Vrms)
+ *
+ * Calculated from the whole ADC block, in millivolts,
+ * with integer math only.
+ * Vrms is the true RMS (DC + AC).
+ * ============================================================ */
+
+static void compute_block_stats(
+    const uint16_t *samples,
+    uint32_t sample_count
+)
+{
+    uint32_t i;
+
+    uint16_t vmin;
+    uint16_t vmax;
+
+    uint64_t sum_sq;
+
+    uint64_t ms_mv2;
+
+
+    if (
+        samples == NULL ||
+        sample_count == 0U
+    )
+    {
+        return;
+    }
+
+
+    vmin =
+        samples[0];
+
+    vmax =
+        samples[0];
+
+    sum_sq =
+        0ULL;
+
+
+    for (
+        i = 0U;
+        i < sample_count;
+        i++
+    )
+    {
+        uint32_t v;
+
+
+        v =
+            samples[i];
+
+
+        if (
+            samples[i] <
+            vmin
+        )
+        {
+            vmin =
+                samples[i];
+        }
+
+
+        if (
+            samples[i] >
+            vmax
+        )
+        {
+            vmax =
+                samples[i];
+        }
+
+
+        sum_sq +=
+            (uint64_t)(v * v);
+    }
+
+
+    meas_vpp_mv =
+        (
+            (uint32_t)(vmax - vmin)
+            *
+            3300U
+        )
+        /
+        4095U;
+
+
+    /*
+     * mean square in mV^2:
+     * sum_sq / N * (3300 / 4095)^2
+     *
+     * 4095^2 = 16769025, 3300^2 = 10890000
+     * sum_sq max = 8192 * 4095^2 = 1.37e11
+     * 1.37e11 * 1.089e7 = 1.5e18  (fits in uint64)
+     */
+    ms_mv2 =
+        (
+            sum_sq *
+            10890000ULL
+        )
+        /
+        (
+            (uint64_t)sample_count *
+            16769025ULL
+        );
+
+
+    meas_vrms_mv =
+        isqrt64(
+            ms_mv2
+        );
 }
 
 
@@ -613,7 +1059,8 @@ static uint32_t find_trigger_index(
 static bool measure_frequency(
     const uint16_t *samples,
     uint32_t sample_count,
-    uint32_t *freq_hz
+    uint32_t *freq_hz,
+    bool *approximate
 )
 {
     uint32_t i;
@@ -642,6 +1089,7 @@ static bool measure_frequency(
     if (
         samples == NULL ||
         freq_hz == NULL ||
+        approximate == NULL ||
         sample_count < 4U
     )
     {
@@ -862,6 +1310,33 @@ static bool measure_frequency(
     )
     {
         return false;
+    }
+
+
+    /*
+     * Aliasing / accuracy guard:
+     *   f > fs / 4   -> not reliable, rejected
+     *   f > fs / 10  -> reported with "~"
+     */
+    {
+        float fs_f;
+
+
+        fs_f =
+            (float)OscopeADC_GetSampleRate();
+
+
+        if (
+            freq * 4.0f >
+            fs_f
+        )
+        {
+            return false;
+        }
+
+
+        *approximate =
+            (freq * 10.0f > fs_f);
     }
 
 
@@ -1308,7 +1783,7 @@ static void create_info_box(void)
         lv_obj_set_size(
             oscope_info_box,
             124,
-            48
+            60
         );
 
 
@@ -1497,6 +1972,42 @@ static void create_info_box(void)
                 "F:---"
             );
     }
+
+
+    /* --------------------------------------------------------
+     * Vpp
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_vpp_label == NULL
+    )
+    {
+        oscope_vpp_label =
+            create_info_label(
+                oscope_info_box,
+                3, 36, 58, 12,
+                OSCOPE_VPP_COLOR,
+                "Vpp:---"
+            );
+    }
+
+
+    /* --------------------------------------------------------
+     * Vrms
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_vrms_label == NULL
+    )
+    {
+        oscope_vrms_label =
+            create_info_label(
+                oscope_info_box,
+                63, 36, 61, 12,
+                OSCOPE_VRMS_COLOR,
+                "Vrms:---"
+            );
+    }
 }
 
 
@@ -1526,9 +2037,9 @@ static void update_info_box(void)
 
 
     time_div =
-        time_div_us_table[
+        time_div_table[
             time_div_index
-        ];
+        ].time_div_us;
 
 
     /*
@@ -1571,12 +2082,27 @@ static void update_info_box(void)
         oscope_time_label != NULL
     )
     {
-        snprintf(
-            text,
-            sizeof(text),
-            "T:%luus/d",
-            (unsigned long)time_div
-        );
+        if (
+            time_div >=
+            1000U
+        )
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "T:%lums/d",
+                (unsigned long)(time_div / 1000U)
+            );
+        }
+        else
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "T:%luus/d",
+                (unsigned long)time_div
+            );
+        }
 
 
         lv_label_set_text(
@@ -1682,22 +2208,43 @@ static void update_info_box(void)
         oscope_status_label != NULL
     )
     {
-        lv_label_set_text(
-            oscope_status_label,
-            oscope_running
-                ? "RUN"
-                : "STOP"
-        );
+        if (
+            oscope_running &&
+            data_waiting
+        )
+        {
+            lv_label_set_text(
+                oscope_status_label,
+                "WAIT"
+            );
 
 
-        lv_obj_set_style_text_color(
-            oscope_status_label,
-            oscope_running
-                ? lv_color_hex(0x66FF66)
-                : lv_color_hex(0xFFFFFF),
-            LV_PART_MAIN |
-            LV_STATE_DEFAULT
-        );
+            lv_obj_set_style_text_color(
+                oscope_status_label,
+                lv_color_hex(0xFFAA44),
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+        }
+        else
+        {
+            lv_label_set_text(
+                oscope_status_label,
+                oscope_running
+                    ? "RUN"
+                    : "STOP"
+            );
+
+
+            lv_obj_set_style_text_color(
+                oscope_status_label,
+                oscope_running
+                    ? lv_color_hex(0x66FF66)
+                    : lv_color_hex(0xFFFFFF),
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+        }
     }
 
 
@@ -1706,6 +2253,7 @@ static void update_info_box(void)
      *
      * < 1 kHz      -> "F:123Hz"
      * 1k .. 1 MHz  -> "F:12.34kHz"
+     * "~" = few samples per period, less accurate.
      * Integer math only.
      * -------------------------------------------------------- */
 
@@ -1713,6 +2261,15 @@ static void update_info_box(void)
         oscope_freq_label != NULL
     )
     {
+        const char *mark;
+
+
+        mark =
+            measured_freq_approx
+                ? "~"
+                : "";
+
+
         if (
             !measured_freq_valid
         )
@@ -1731,7 +2288,8 @@ static void update_info_box(void)
             snprintf(
                 text,
                 sizeof(text),
-                "F:%luHz",
+                "F:%s%luHz",
+                mark,
                 (unsigned long)measured_freq_hz
             );
         }
@@ -1743,7 +2301,8 @@ static void update_info_box(void)
             snprintf(
                 text,
                 sizeof(text),
-                "F:%lu.%02lukHz",
+                "F:%s%lu.%02lukHz",
+                mark,
                 (unsigned long)(measured_freq_hz / 1000U),
                 (unsigned long)((measured_freq_hz % 1000U) / 10U)
             );
@@ -1753,7 +2312,8 @@ static void update_info_box(void)
             snprintf(
                 text,
                 sizeof(text),
-                "F:%lu.%02luMHz",
+                "F:%s%lu.%02luMHz",
+                mark,
                 (unsigned long)(measured_freq_hz / 1000000U),
                 (unsigned long)((measured_freq_hz % 1000000U) / 10000U)
             );
@@ -1762,6 +2322,54 @@ static void update_info_box(void)
 
         lv_label_set_text(
             oscope_freq_label,
+            text
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * Vpp
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_vpp_label != NULL
+    )
+    {
+        snprintf(
+            text,
+            sizeof(text),
+            "Vpp:%lu.%02luV",
+            (unsigned long)(meas_vpp_mv / 1000U),
+            (unsigned long)((meas_vpp_mv % 1000U) / 10U)
+        );
+
+
+        lv_label_set_text(
+            oscope_vpp_label,
+            text
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * Vrms
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_vrms_label != NULL
+    )
+    {
+        snprintf(
+            text,
+            sizeof(text),
+            "Vrms:%lu.%02luV",
+            (unsigned long)(meas_vrms_mv / 1000U),
+            (unsigned long)((meas_vrms_mv % 1000U) / 10U)
+        );
+
+
+        lv_label_set_text(
+            oscope_vrms_label,
             text
         );
     }
@@ -1851,9 +2459,9 @@ static bool prepare_new_sweep(void)
 {
     uint32_t view_sample_count;
 
-    uint32_t trigger_index;
-
     uint32_t pre_trigger;
+
+    uint32_t post_trigger;
 
     uint32_t start_index;
 
@@ -1862,6 +2470,16 @@ static bool prepare_new_sweep(void)
     uint32_t i;
 
     uint32_t freq_hz;
+
+    bool freq_approx;
+
+    bool triggered;
+
+    float trigger_pos;
+
+    float start_pos;
+
+    float max_start;
 
 
     /*
@@ -1879,14 +2497,26 @@ static bool prepare_new_sweep(void)
 
 
     /*
+     * Fresh data after a sample-rate change has arrived.
+     */
+    data_waiting =
+        false;
+
+
+    /*
      * Frequency is measured from the WHOLE block,
      * independent of Time/Div and Volt/Div.
      */
+    freq_approx =
+        false;
+
+
     if (
         measure_frequency(
             latest_block,
             OSCOPE_ADC_BLOCK_SIZE,
-            &freq_hz
+            &freq_hz,
+            &freq_approx
         )
     )
     {
@@ -1895,6 +2525,9 @@ static bool prepare_new_sweep(void)
 
         measured_freq_valid =
             true;
+
+        measured_freq_approx =
+            freq_approx;
     }
     else
     {
@@ -1903,7 +2536,19 @@ static bool prepare_new_sweep(void)
 
         measured_freq_valid =
             false;
+
+        measured_freq_approx =
+            false;
     }
+
+
+    /*
+     * Vpp / Vrms.
+     */
+    compute_block_stats(
+        latest_block,
+        OSCOPE_ADC_BLOCK_SIZE
+    );
 
 
     /*
@@ -1914,17 +2559,7 @@ static bool prepare_new_sweep(void)
 
 
     /*
-     * Find trigger.
-     */
-    trigger_index =
-        find_trigger_index(
-            latest_block,
-            OSCOPE_ADC_BLOCK_SIZE
-        );
-
-
-    /*
-     * 30% before trigger.
+     * 30% of the window is before the trigger.
      */
     pre_trigger =
         (
@@ -1936,38 +2571,68 @@ static bool prepare_new_sweep(void)
         100U;
 
 
-    if (
-        trigger_index >
-        pre_trigger
-    )
-    {
-        start_index =
-            trigger_index
-            -
-            pre_trigger;
-    }
-    else
-    {
-        start_index =
-            0U;
-    }
+    post_trigger =
+        view_sample_count
+        -
+        pre_trigger;
 
 
     /*
-     * Stay inside DMA block.
+     * Trigger search: only crossings that leave enough samples
+     * before and after, so the whole window fits in the block.
      */
-    if (
-        start_index
-        +
-        view_sample_count
-        >
-        OSCOPE_ADC_BLOCK_SIZE
-    )
-    {
-        start_index =
+    triggered =
+        find_trigger_position(
+            latest_block,
+            OSCOPE_ADC_BLOCK_SIZE,
+            pre_trigger + 1U,
+            OSCOPE_ADC_BLOCK_SIZE - post_trigger,
+            &trigger_pos
+        );
+
+
+    max_start =
+        (float)(
             OSCOPE_ADC_BLOCK_SIZE
             -
-            view_sample_count;
+            view_sample_count
+        );
+
+
+    if (
+        triggered
+    )
+    {
+        start_pos =
+            trigger_pos
+            -
+            (float)pre_trigger;
+    }
+    else
+    {
+        /*
+         * No trigger: free-run, window in the middle of the block.
+         */
+        start_pos =
+            max_start / 2.0f;
+    }
+
+
+    if (
+        start_pos < 0.0f
+    )
+    {
+        start_pos =
+            0.0f;
+    }
+
+
+    if (
+        start_pos > max_start
+    )
+    {
+        start_pos =
+            max_start;
     }
 
 
@@ -1983,6 +2648,8 @@ static bool prepare_new_sweep(void)
      * MORE ADC SAMPLES THAN SCREEN POINTS
      *
      * Min/Max Envelope
+     * (jitter is below one pixel here, so the integer start
+     * index is accurate enough)
      * ======================================================== */
 
     if (
@@ -1990,6 +2657,25 @@ static bool prepare_new_sweep(void)
         OSCOPE_POINTS
     )
     {
+        start_index =
+            (uint32_t)(start_pos + 0.5f);
+
+
+        if (
+            start_index
+            +
+            view_sample_count
+            >
+            OSCOPE_ADC_BLOCK_SIZE
+        )
+        {
+            start_index =
+                OSCOPE_ADC_BLOCK_SIZE
+                -
+                view_sample_count;
+        }
+
+
         for (
             point = 0U;
             point < OSCOPE_POINTS;
@@ -2128,7 +2814,9 @@ static bool prepare_new_sweep(void)
     /* ========================================================
      * FEWER ADC SAMPLES THAN SCREEN POINTS
      *
-     * Stretch samples.
+     * Cubic interpolation at fractional positions.
+     * The fractional trigger position is kept, so the
+     * waveform does not jitter from sweep to sweep.
      * ======================================================== */
 
     else
@@ -2139,35 +2827,53 @@ static bool prepare_new_sweep(void)
             point++
         )
         {
-            uint32_t source_index;
+            float pos;
+
+            float value_f;
 
             uint16_t value;
 
 
-            source_index =
+            pos =
+                start_pos
+                +
                 (
-                    point
+                    (float)point
                     *
-                    (
-                        view_sample_count
-                        -
-                        1U
-                    )
+                    (float)(view_sample_count - 1U)
                 )
                 /
-                (
-                    OSCOPE_POINTS
-                    -
-                    1U
+                (float)(OSCOPE_POINTS - 1U);
+
+
+            value_f =
+                interpolate_cubic(
+                    latest_block,
+                    OSCOPE_ADC_BLOCK_SIZE,
+                    pos
                 );
 
 
+            if (
+                value_f < 0.0f
+            )
+            {
+                value_f =
+                    0.0f;
+            }
+
+
+            if (
+                value_f > 4095.0f
+            )
+            {
+                value_f =
+                    4095.0f;
+            }
+
+
             value =
-                latest_block[
-                    start_index
-                    +
-                    source_index
-                ];
+                (uint16_t)(value_f + 0.5f);
 
 
             sweep_min_values[point] =
@@ -2232,12 +2938,76 @@ static bool prepare_new_sweep(void)
 
 
     /*
-     * Update info (includes frequency).
+     * Update info (frequency, Vpp, Vrms ...).
      */
     update_info_box();
 
 
     return true;
+}
+
+
+/* ============================================================
+ * APPLY SAMPLE RATE FOR CURRENT TIME/DIV
+ *
+ * Each Time/Div has its own ADC sample rate.
+ * The ADC is restarted only when the rate really changes.
+ * ============================================================ */
+
+static void apply_time_div_rate(void)
+{
+    uint32_t wanted;
+
+
+    wanted =
+        time_div_table[
+            time_div_index
+        ].sample_rate_hz;
+
+
+    if (
+        wanted ==
+        applied_rate_hz
+    )
+    {
+        return;
+    }
+
+
+    applied_rate_hz =
+        wanted;
+
+
+    sweep_active =
+        false;
+
+
+    if (
+        OscopeADC_SetSampleRate(
+            wanted
+        ) != HAL_OK
+    )
+    {
+        oscope_running =
+            false;
+
+        return;
+    }
+
+
+    if (
+        oscope_running
+    )
+    {
+        /*
+         * Old data belongs to the previous rate.
+         * The first new block needs 8192 / rate seconds.
+         */
+        data_waiting =
+            true;
+
+        clear_chart();
+    }
 }
 
 
@@ -2477,12 +3247,29 @@ void OscopePage_OnEnter(void)
         !oscope_running
     )
     {
+        /*
+         * Sample rate of the current Time/Div first.
+         */
+        applied_rate_hz =
+            time_div_table[
+                time_div_index
+            ].sample_rate_hz;
+
+
+        OscopeADC_SetSampleRate(
+            applied_rate_hz
+        );
+
+
         if (
             OscopeADC_Start() ==
             HAL_OK
         )
         {
             oscope_running =
+                true;
+
+            data_waiting =
                 true;
         }
     }
@@ -2588,6 +3375,9 @@ void OscopePage_TimeIncrease(void)
     }
 
 
+    apply_time_div_rate();
+
+
     reset_sweep();
 
 
@@ -2608,6 +3398,9 @@ void OscopePage_TimeDecrease(void)
     {
         time_div_index--;
     }
+
+
+    apply_time_div_rate();
 
 
     reset_sweep();
@@ -2768,12 +3561,26 @@ void OscopePage_ToggleRunStop(void)
     }
     else
     {
+        applied_rate_hz =
+            time_div_table[
+                time_div_index
+            ].sample_rate_hz;
+
+
+        OscopeADC_SetSampleRate(
+            applied_rate_hz
+        );
+
+
         if (
             OscopeADC_Start() ==
             HAL_OK
         )
         {
             oscope_running =
+                true;
+
+            data_waiting =
                 true;
 
 

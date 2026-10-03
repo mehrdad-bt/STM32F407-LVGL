@@ -47,6 +47,43 @@ static volatile bool latest_block_valid = false;
  */
 static volatile uint32_t latest_half_index = 0U;
 
+/*
+ * Current (actual) sample rate.
+ */
+static uint32_t sample_rate_hz =
+    OSCOPE_ADC_DEFAULT_SAMPLE_RATE_HZ;
+
+
+/* ============================================================
+ * TIMER CLOCK
+ * ============================================================ */
+
+/*
+ * TIM2 is on APB1.
+ * When the APB1 prescaler is not 1, the timer clock is 2 x PCLK1.
+ * (168 MHz system: PCLK1 = 42 MHz, TIM2 = 84 MHz)
+ */
+static uint32_t get_timer_clock_hz(void)
+{
+    uint32_t clk;
+
+
+    clk =
+        HAL_RCC_GetPCLK1Freq();
+
+
+    if (
+        (RCC->CFGR & RCC_CFGR_PPRE1) !=
+        RCC_CFGR_PPRE1_DIV1
+    )
+    {
+        clk *= 2U;
+    }
+
+
+    return clk;
+}
+
 
 /* ============================================================
  * START
@@ -103,6 +140,17 @@ HAL_StatusTypeDef OscopeADC_Start(void)
     {
         return adc_status;
     }
+
+
+    /*
+     * Start from counter = 0, otherwise a counter value
+     * above the new ARR would run through a full 32-bit
+     * wrap-around before the first trigger.
+     */
+    __HAL_TIM_SET_COUNTER(
+        &htim2,
+        0U
+    );
 
 
     /*
@@ -168,6 +216,133 @@ void OscopeADC_Stop(void)
 
     adc_running =
         false;
+}
+
+
+/* ============================================================
+ * SET SAMPLE RATE
+ * ============================================================ */
+
+HAL_StatusTypeDef OscopeADC_SetSampleRate(
+    uint32_t rate_hz
+)
+{
+    uint32_t timer_clk;
+    uint32_t period_ticks;
+    bool was_running;
+
+
+    if (
+        rate_hz >
+        OSCOPE_ADC_MAX_SAMPLE_RATE_HZ
+    )
+    {
+        rate_hz =
+            OSCOPE_ADC_MAX_SAMPLE_RATE_HZ;
+    }
+
+
+    if (
+        rate_hz <
+        OSCOPE_ADC_MIN_SAMPLE_RATE_HZ
+    )
+    {
+        rate_hz =
+            OSCOPE_ADC_MIN_SAMPLE_RATE_HZ;
+    }
+
+
+    timer_clk =
+        get_timer_clock_hz();
+
+
+    /*
+     * Rounded timer period in timer ticks.
+     * TIM2 is a 32-bit timer, so no prescaler is needed.
+     */
+    period_ticks =
+        (
+            timer_clk +
+            (rate_hz / 2U)
+        )
+        /
+        rate_hz;
+
+
+    if (
+        period_ticks <
+        2U
+    )
+    {
+        period_ticks =
+            2U;
+    }
+
+
+    was_running =
+        adc_running;
+
+
+    /*
+     * The timer and the ADC/DMA must be stopped while
+     * the period is changed.
+     */
+    if (
+        was_running
+    )
+    {
+        OscopeADC_Stop();
+    }
+
+
+    __HAL_TIM_SET_AUTORELOAD(
+        &htim2,
+        period_ticks - 1U
+    );
+
+
+    __HAL_TIM_SET_COUNTER(
+        &htim2,
+        0U
+    );
+
+
+    htim2.Init.Prescaler =
+        0U;
+
+
+    htim2.Init.Period =
+        period_ticks - 1U;
+
+
+    /*
+     * Actual rate after rounding.
+     */
+    sample_rate_hz =
+        (
+            timer_clk +
+            (period_ticks / 2U)
+        )
+        /
+        period_ticks;
+
+
+    /*
+     * Any stored block belongs to the old rate.
+     */
+    latest_block_valid =
+        false;
+
+
+    if (
+        was_running
+    )
+    {
+        return OscopeADC_Start();
+    }
+
+
+    return HAL_OK;
 }
 
 
@@ -259,7 +434,7 @@ bool OscopeADC_GetLatestBlock(
 
 uint32_t OscopeADC_GetSampleRate(void)
 {
-    return OSCOPE_ADC_SAMPLE_RATE_HZ;
+    return sample_rate_hz;
 }
 
 
