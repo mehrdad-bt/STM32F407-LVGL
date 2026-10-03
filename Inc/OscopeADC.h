@@ -10,11 +10,31 @@
 extern "C" {
 #endif
 
-#define OSCOPE_ADC_DMA_BUFFER_SIZE   1024U
-#define OSCOPE_ADC_BLOCK_SIZE         512U
-#define OSCOPE_ADC_SAMPLE_RATE_HZ     200000UL
+/*
+ * DMA total buffer:
+ *
+ * 2048 samples
+ *
+ * At 500 kHz:
+ *
+ * 2048 / 500000
+ * = 4.096 ms
+ */
+#define OSCOPE_ADC_DMA_BUFFER_SIZE   2048U
+
+/*
+ * One completed half.
+ *
+ * 1024 samples
+ * = 2.048 ms at 500 kHz
+ */
+#define OSCOPE_ADC_BLOCK_SIZE        1024U
+
+#define OSCOPE_ADC_SAMPLE_RATE_HZ    500000UL
+
 
 HAL_StatusTypeDef OscopeADC_Start(void);
+
 HAL_StatusTypeDef OscopeADC_Stop(void);
 
 bool OscopeADC_GetLatestBlock(
@@ -36,6 +56,7 @@ uint16_t OscopeADC_GetBlockSize(void);
 uint32_t OscopeADC_GetSampleRate(void);
 
 bool OscopeADC_IsRunning(void);
+
 
 #ifdef __cplusplus
 }

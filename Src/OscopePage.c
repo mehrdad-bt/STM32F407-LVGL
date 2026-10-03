@@ -16,38 +16,49 @@
  * General configuration
  * ========================================================== */
 
-#define OSCOPE_ADC_MAX                 4095U
-#define OSCOPE_ADC_REFERENCE           3.3f
+#define OSCOPE_ADC_MAX                  4095U
+#define OSCOPE_ADC_REFERENCE            3.3f
 
-#define OSCOPE_HORIZONTAL_DIVS         10U
-#define OSCOPE_VERTICAL_DIVS           8U
+#define OSCOPE_HORIZONTAL_DIVS          10U
+#define OSCOPE_VERTICAL_DIVS             8U
+
+#define OSCOPE_MAX_CHART_POINTS        300U
 
 /*
- * Trigger position on screen.
+ * Trigger position in the visible waveform.
  *
- * 25% means the trigger point is placed
- * approximately at one quarter of the
- * horizontal screen width.
+ * 25% = trigger approximately one quarter
+ * from the left side.
  */
 #define OSCOPE_TRIGGER_POSITION         25U
+
+/*
+ * Trigger hysteresis.
+ */
+#define OSCOPE_TRIGGER_HYSTERESIS      32U
+
+
+/* ==========================================================
+ * Chart geometry
+ *
+ * From EEZ screen.c:
+ *
+ * chart x = 11
+ * chart y = 9
+ * chart w = 299
+ * chart h = 164
+ * ========================================================== */
+
+#define OSCOPE_CHART_X                  11
+#define OSCOPE_CHART_Y                   9
+#define OSCOPE_CHART_WIDTH            299
+#define OSCOPE_CHART_HEIGHT           164
 
 
 /* ==========================================================
  * Time / Division
  * ========================================================== */
 
-/*
- * ADC sample rate is currently:
- *
- * 200 kHz
- *
- * Therefore:
- *
- * 20 us/div  -> 40 samples total
- * 50 us/div  -> 100 samples total
- * 100 us/div -> 200 samples total
- * 200 us/div -> 400 samples total
- */
 static const uint32_t oscope_time_div_us[] =
 {
     20U,
@@ -96,28 +107,9 @@ static uint32_t oscope_volt_index = 2U;
  * Trigger
  * ========================================================== */
 
-/*
- * Trigger level in ADC counts.
- *
- * 0 V     = 0
- * 3.3 V   = 4095
- * 1.65 V  = about 2048
- */
 #define OSCOPE_TRIGGER_MIN             128U
 #define OSCOPE_TRIGGER_MAX            3967U
-#define OSCOPE_TRIGGER_STEP             64U
-
-/*
- * Trigger hysteresis.
- *
- * For example, with trigger = 2048:
- *
- * previous <= 2016
- * current  >= 2080
- *
- * will be accepted as a rising edge.
- */
-#define OSCOPE_TRIGGER_HYSTERESIS      32U
+#define OSCOPE_TRIGGER_STEP              64U
 
 static uint16_t oscope_trigger_level = 2048U;
 
@@ -130,12 +122,21 @@ static bool oscope_running = false;
 
 
 /* ==========================================================
+ * Redraw request
+ * ========================================================== */
+
+static bool oscope_redraw_requested = false;
+
+
+/* ==========================================================
  * LVGL objects
  * ========================================================== */
 
 static lv_timer_t *oscope_timer = NULL;
 
 static lv_obj_t *oscope_info_label = NULL;
+
+static lv_obj_t *oscope_trigger_line = NULL;
 
 static lv_chart_series_t *oscope_series = NULL;
 
@@ -152,12 +153,23 @@ static uint16_t oscope_last_count = 0U;
 
 
 /* ==========================================================
+ * Chart state
+ * ========================================================== */
+
+static uint16_t last_chart_point_count = 0U;
+
+
+/* ==========================================================
  * Forward declarations
  * ========================================================== */
 
 static void OscopePage_ConfigureChart(void);
 
 static void OscopePage_CreateInfoLabel(void);
+
+static void OscopePage_CreateTriggerLine(void);
+
+static void OscopePage_UpdateTriggerLine(void);
 
 static void OscopePage_UpdateInfoLabel(void);
 
@@ -206,7 +218,7 @@ static float OscopePage_AdcToVoltage(
 
 
 /* ==========================================================
- * Calculate visible samples from Time/Div
+ * Time/Div -> source sample count
  * ========================================================== */
 
 static uint16_t OscopePage_GetVisibleSampleCount(void)
@@ -227,13 +239,6 @@ static uint16_t OscopePage_GetVisibleSampleCount(void)
         OSCOPE_HORIZONTAL_DIVS;
 
 
-    /*
-     * samples =
-     *
-     * sample_rate * time
-     *
-     * Hz * us / 1,000,000
-     */
     samples =
         (
             sample_rate *
@@ -248,12 +253,10 @@ static uint16_t OscopePage_GetVisibleSampleCount(void)
     }
 
 
-    /*
-     * DMA half-buffer is our maximum
-     * currently available block size.
-     */
-    if (samples >
-        OSCOPE_ADC_BLOCK_SIZE)
+    if (
+        samples >
+        OSCOPE_ADC_BLOCK_SIZE
+    )
     {
         samples =
             OSCOPE_ADC_BLOCK_SIZE;
@@ -265,11 +268,9 @@ static uint16_t OscopePage_GetVisibleSampleCount(void)
 
 
 /* ==========================================================
- * ADC -> Chart
+ * ADC -> Chart value
  *
- * Volt/Div changes the visible vertical range.
- *
- * Center = 1.65 V
+ * Vertical center = 1.65V
  * ========================================================== */
 
 static uint16_t OscopePage_AdcToChart(
@@ -346,8 +347,10 @@ static uint16_t OscopePage_AdcToChart(
     }
 
 
-    if (chart_value >
-        (float)OSCOPE_ADC_MAX)
+    if (
+        chart_value >
+        (float)OSCOPE_ADC_MAX
+    )
     {
         chart_value =
             (float)OSCOPE_ADC_MAX;
@@ -359,7 +362,7 @@ static uint16_t OscopePage_AdcToChart(
 
 
 /* ==========================================================
- * Find rising trigger edge
+ * Find rising trigger
  * ========================================================== */
 
 static int OscopePage_FindTrigger(
@@ -386,7 +389,7 @@ static int OscopePage_FindTrigger(
 
 
     /*
-     * Calculate hysteresis thresholds.
+     * Hysteresis thresholds.
      */
     if (
         oscope_trigger_level >
@@ -405,8 +408,10 @@ static int OscopePage_FindTrigger(
 
     if (
         oscope_trigger_level <
-        (OSCOPE_ADC_MAX -
-         OSCOPE_TRIGGER_HYSTERESIS)
+        (
+            OSCOPE_ADC_MAX -
+            OSCOPE_TRIGGER_HYSTERESIS
+        )
     )
     {
         high_level =
@@ -421,10 +426,7 @@ static int OscopePage_FindTrigger(
 
 
     /*
-     * Rising edge:
-     *
-     * previous <= low threshold
-     * current  >= high threshold
+     * Rising edge.
      */
     for (
         i = 1U;
@@ -464,18 +466,6 @@ static void OscopePage_ConfigureChart(void)
     );
 
 
-    /*
-     * Initial point count.
-     *
-     * It will be changed dynamically according
-     * to Time/Div.
-     */
-    lv_chart_set_point_count(
-        objects.chart_oscope,
-        200U
-    );
-
-
     lv_chart_set_range(
         objects.chart_oscope,
         LV_CHART_AXIS_PRIMARY_Y,
@@ -501,8 +491,15 @@ static void OscopePage_ConfigureChart(void)
 
 
     /*
-     * Create series only once.
+     * Waveform line width.
      */
+    lv_obj_set_style_line_width(
+        objects.chart_oscope,
+        2,
+        LV_PART_ITEMS
+    );
+
+
     if (oscope_series == NULL)
     {
         oscope_series =
@@ -518,7 +515,7 @@ static void OscopePage_ConfigureChart(void)
 
 
 /* ==========================================================
- * Create info label
+ * Create information label
  * ========================================================== */
 
 static void OscopePage_CreateInfoLabel(void)
@@ -585,7 +582,193 @@ static void OscopePage_CreateInfoLabel(void)
 
 
 /* ==========================================================
- * Update information label
+ * Create Trigger line
+ * ========================================================== */
+
+static void OscopePage_CreateTriggerLine(void)
+{
+    static lv_point_t points[2];
+
+
+    if (oscope_trigger_line != NULL)
+    {
+        return;
+    }
+
+
+    if (objects.osilloscop == NULL)
+    {
+        return;
+    }
+
+
+    /*
+     * Create a line as a sibling of the chart.
+     *
+     * It will sit exactly over the chart area.
+     */
+    oscope_trigger_line =
+        lv_line_create(
+            objects.osilloscop
+        );
+
+
+    if (oscope_trigger_line == NULL)
+    {
+        return;
+    }
+
+
+    points[0].x = 0;
+    points[0].y = 0;
+
+    points[1].x =
+        OSCOPE_CHART_WIDTH - 1;
+
+    points[1].y = 0;
+
+
+    lv_line_set_points(
+        oscope_trigger_line,
+        points,
+        2
+    );
+
+
+    /*
+     * Trigger line style.
+     */
+    lv_obj_set_style_line_width(
+        oscope_trigger_line,
+        1,
+        LV_PART_MAIN |
+        LV_STATE_DEFAULT
+    );
+
+
+    lv_obj_set_style_line_color(
+        oscope_trigger_line,
+        lv_palette_main(
+            LV_PALETTE_YELLOW
+        ),
+        LV_PART_MAIN |
+        LV_STATE_DEFAULT
+    );
+
+
+    lv_obj_set_style_line_opa(
+        oscope_trigger_line,
+        LV_OPA_80,
+        LV_PART_MAIN |
+        LV_STATE_DEFAULT
+    );
+
+
+    /*
+     * Exact chart position.
+     */
+    lv_obj_set_pos(
+        oscope_trigger_line,
+        OSCOPE_CHART_X,
+        OSCOPE_CHART_Y
+    );
+
+
+    lv_obj_set_size(
+        oscope_trigger_line,
+        OSCOPE_CHART_WIDTH,
+        OSCOPE_CHART_HEIGHT
+    );
+
+
+    OscopePage_UpdateTriggerLine();
+}
+
+
+/* ==========================================================
+ * Update Trigger line position
+ * ========================================================== */
+
+static void OscopePage_UpdateTriggerLine(void)
+{
+    static lv_point_t points[2];
+
+    uint16_t chart_value;
+
+    int32_t y;
+
+
+    if (oscope_trigger_line == NULL)
+    {
+        return;
+    }
+
+
+    /*
+     * Use exactly the same vertical scaling
+     * as waveform.
+     */
+    chart_value =
+        OscopePage_AdcToChart(
+            oscope_trigger_level
+        );
+
+
+    /*
+     * LVGL chart:
+     *
+     * maximum value = top
+     * minimum value = bottom
+     */
+    y =
+        (
+            (int32_t)(OSCOPE_ADC_MAX -
+                      chart_value) *
+            (OSCOPE_CHART_HEIGHT - 1)
+        ) /
+        OSCOPE_ADC_MAX;
+
+
+    if (y < 0)
+    {
+        y = 0;
+    }
+
+
+    if (
+        y >
+        (OSCOPE_CHART_HEIGHT - 1)
+    )
+    {
+        y =
+            OSCOPE_CHART_HEIGHT - 1;
+    }
+
+
+    points[0].x = 0;
+    points[0].y = (lv_coord_t)y;
+
+    points[1].x =
+        OSCOPE_CHART_WIDTH - 1;
+
+    points[1].y = (lv_coord_t)y;
+
+
+    lv_line_set_points(
+        oscope_trigger_line,
+        points,
+        2
+    );
+
+
+    lv_obj_invalidate(
+        oscope_trigger_line
+    );
+}
+
+
+/* ==========================================================
+ * Update info label
  * ========================================================== */
 
 static void OscopePage_UpdateInfoLabel(void)
@@ -763,10 +946,6 @@ static void OscopePage_UpdateRunStopButton(void)
     }
 
 
-    /*
-     * The only child of stop_run_btn
-     * is its label.
-     */
     label =
         lv_obj_get_child(
             objects.stop_run_btn,
@@ -807,11 +986,9 @@ static void OscopePage_DrawSamples(
 )
 {
     uint16_t visible_count;
-
     uint16_t display_count;
 
     uint16_t display_index;
-
     uint16_t source_index;
 
     uint16_t chart_value;
@@ -823,6 +1000,8 @@ static void OscopePage_DrawSamples(
     int maximum_start;
 
     int pretrigger_samples;
+
+    uint32_t source_offset;
 
 
     if (samples == NULL)
@@ -857,7 +1036,7 @@ static void OscopePage_DrawSamples(
 
     /*
      * Exact number of ADC samples corresponding
-     * to the selected Time/Div.
+     * to selected Time/Div.
      */
     visible_count =
         OscopePage_GetVisibleSampleCount();
@@ -865,7 +1044,8 @@ static void OscopePage_DrawSamples(
 
     if (visible_count > count)
     {
-        visible_count = count;
+        visible_count =
+            count;
     }
 
 
@@ -876,9 +1056,7 @@ static void OscopePage_DrawSamples(
 
 
     /*
-     * ------------------------------------------------------
-     * Trigger
-     * ------------------------------------------------------
+     * Trigger.
      */
     trigger_index =
         OscopePage_FindTrigger(
@@ -887,9 +1065,6 @@ static void OscopePage_DrawSamples(
         );
 
 
-    /*
-     * Number of samples before trigger.
-     */
     pretrigger_samples =
         (
             (int)visible_count *
@@ -897,9 +1072,6 @@ static void OscopePage_DrawSamples(
         ) / 100;
 
 
-    /*
-     * Largest possible window start.
-     */
     maximum_start =
         (int)count -
         (int)visible_count;
@@ -912,16 +1084,15 @@ static void OscopePage_DrawSamples(
 
 
     /*
-     * Default:
-     * show the latest window.
+     * Default to latest window.
      */
     start_index =
         maximum_start;
 
 
     /*
-     * If trigger was found,
-     * place it around 25% of the display.
+     * If trigger exists, center the visible window
+     * around the trigger position.
      */
     if (trigger_index >= 0)
     {
@@ -936,8 +1107,10 @@ static void OscopePage_DrawSamples(
         }
 
 
-        if (start_index >
-            maximum_start)
+        if (
+            start_index >
+            maximum_start
+        )
         {
             start_index =
                 maximum_start;
@@ -946,29 +1119,40 @@ static void OscopePage_DrawSamples(
 
 
     /*
-     * ------------------------------------------------------
-     * Point count
-     * ------------------------------------------------------
-     *
-     * This is important:
-     *
-     * The chart point count now follows
-     * the actual number of samples.
-     *
-     * So 40 source samples at 20us/div
-     * stay 40 points.
-     *
-     * We no longer stretch 40 samples into
-     * 300 duplicated points.
+     * Do not create more points than
+     * necessary for the display.
      */
     display_count =
         visible_count;
 
 
-    lv_chart_set_point_count(
-        objects.chart_oscope,
+    if (
+        display_count >
+        OSCOPE_MAX_CHART_POINTS
+    )
+    {
+        display_count =
+            OSCOPE_MAX_CHART_POINTS;
+    }
+
+
+    /*
+     * Change point count only when necessary.
+     */
+    if (
+        last_chart_point_count !=
         display_count
-    );
+    )
+    {
+        lv_chart_set_point_count(
+            objects.chart_oscope,
+            display_count
+        );
+
+
+        last_chart_point_count =
+            display_count;
+    }
 
 
     /*
@@ -982,9 +1166,7 @@ static void OscopePage_DrawSamples(
 
 
     /*
-     * ------------------------------------------------------
-     * Draw exact source samples
-     * ------------------------------------------------------
+     * Draw.
      */
     for (
         display_index = 0U;
@@ -992,10 +1174,28 @@ static void OscopePage_DrawSamples(
         display_index++
     )
     {
+        if (display_count <= 1U)
+        {
+            source_offset = 0U;
+        }
+        else
+        {
+            source_offset =
+                (
+                    (uint32_t)
+                    display_index *
+                    (uint32_t)
+                    (visible_count - 1U)
+                ) /
+                (uint32_t)
+                (display_count - 1U);
+        }
+
+
         source_index =
             (uint16_t)(
                 start_index +
-                (int)display_index
+                (int)source_offset
             );
 
 
@@ -1013,10 +1213,7 @@ static void OscopePage_DrawSamples(
 
 
         /*
-         * Important:
-         *
-         * set_next_value was the method that
-         * produced the working waveform.
+         * Known-good LVGL function.
          */
         lv_chart_set_next_value(
             objects.chart_oscope,
@@ -1034,19 +1231,23 @@ static void OscopePage_DrawSamples(
     lv_obj_invalidate(
         objects.chart_oscope
     );
+
+
+    /*
+     * Trigger line must remain above the chart.
+     */
+    OscopePage_UpdateTriggerLine();
 }
 
 
 /* ==========================================================
- * Redraw last samples after setting changes
+ * Draw latest block
  * ========================================================== */
 
 static void OscopePage_DrawLastSamples(void)
 {
     if (oscope_last_count == 0U)
     {
-        OscopePage_UpdateInfoLabel();
-
         return;
     }
 
@@ -1055,9 +1256,6 @@ static void OscopePage_DrawLastSamples(void)
         oscope_samples,
         oscope_last_count
     );
-
-
-    OscopePage_UpdateInfoLabel();
 }
 
 
@@ -1082,7 +1280,7 @@ static void OscopePage_TimerCallback(
 
 
     /*
-     * Get newest complete DMA block.
+     * Get newest completed DMA block.
      */
     received =
         OscopeADC_GetLatestBlock(
@@ -1091,20 +1289,37 @@ static void OscopePage_TimerCallback(
         );
 
 
-    if (!received)
+    if (received)
     {
-        return;
+        oscope_last_count =
+            OscopeADC_GetBlockSize();
+
+
+        /*
+         * New data has arrived.
+         */
+        oscope_redraw_requested =
+            true;
     }
 
 
-    oscope_last_count =
-        OSCOPE_ADC_BLOCK_SIZE;
+    /*
+     * Redraw only when needed.
+     */
+    if (
+        oscope_redraw_requested &&
+        oscope_last_count > 0U
+    )
+    {
+        OscopePage_DrawSamples(
+            oscope_samples,
+            oscope_last_count
+        );
 
 
-    OscopePage_DrawSamples(
-        oscope_samples,
-        oscope_last_count
-    );
+        oscope_redraw_requested =
+            false;
+    }
 
 
     OscopePage_UpdateInfoLabel();
@@ -1118,11 +1333,7 @@ static void OscopePage_TimerCallback(
 void OscopePage_OnEnter(void)
 {
     /*
-     * Default:
-     *
-     * 100 us/div
-     * 0.5 V/div
-     * 1.65 V trigger
+     * Defaults
      */
     oscope_time_index = 2U;
 
@@ -1131,7 +1342,14 @@ void OscopePage_OnEnter(void)
     oscope_trigger_level =
         2048U;
 
+
     oscope_last_count = 0U;
+
+    oscope_redraw_requested =
+        false;
+
+    last_chart_point_count =
+        0U;
 
 
     /*
@@ -1140,29 +1358,26 @@ void OscopePage_OnEnter(void)
     OscopePage_ConfigureChart();
 
 
-    if (oscope_series != NULL)
-    {
-        lv_chart_set_all_value(
-            objects.chart_oscope,
-            oscope_series,
-            0
-        );
-
-
-        lv_chart_refresh(
-            objects.chart_oscope
-        );
-    }
-
-
     /*
-     * Create info label.
+     * Create information label.
      */
     OscopePage_CreateInfoLabel();
 
 
     /*
-     * Delete old timer if any.
+     * Create Trigger line.
+     */
+    OscopePage_CreateTriggerLine();
+
+
+    /*
+     * Ensure initial Trigger position is correct.
+     */
+    OscopePage_UpdateTriggerLine();
+
+
+    /*
+     * Delete old timer if necessary.
      */
     if (oscope_timer != NULL)
     {
@@ -1182,11 +1397,13 @@ void OscopePage_OnEnter(void)
         HAL_OK
     )
     {
-        oscope_running = true;
+        oscope_running =
+            true;
     }
     else
     {
-        oscope_running = false;
+        oscope_running =
+            false;
     }
 
 
@@ -1196,12 +1413,12 @@ void OscopePage_OnEnter(void)
 
 
     /*
-     * LVGL refresh timer.
+     * UI refresh.
      */
     oscope_timer =
         lv_timer_create(
             OscopePage_TimerCallback,
-            20,
+            30,
             NULL
         );
 }
@@ -1214,13 +1431,13 @@ void OscopePage_OnEnter(void)
 void OscopePage_OnExit(void)
 {
     /*
-     * Stop ADC + DMA + TIM2.
+     * Stop acquisition.
      */
     OscopeADC_Stop();
 
 
     /*
-     * Stop LVGL timer.
+     * Delete timer.
      */
     if (oscope_timer != NULL)
     {
@@ -1233,7 +1450,7 @@ void OscopePage_OnExit(void)
 
 
     /*
-     * Delete custom information label.
+     * Delete information label.
      */
     if (oscope_info_label != NULL)
     {
@@ -1242,6 +1459,19 @@ void OscopePage_OnExit(void)
         );
 
         oscope_info_label = NULL;
+    }
+
+
+    /*
+     * Delete Trigger line.
+     */
+    if (oscope_trigger_line != NULL)
+    {
+        lv_obj_del(
+            oscope_trigger_line
+        );
+
+        oscope_trigger_line = NULL;
     }
 
 
@@ -1265,10 +1495,14 @@ void OscopePage_TimeIncrease(void)
 
 
     /*
-     * Redraw current captured block
-     * with the new exact time window.
+     * Only request redraw.
+     * Do not redraw inside button callback.
      */
-    OscopePage_DrawLastSamples();
+    oscope_redraw_requested =
+        true;
+
+
+    OscopePage_UpdateInfoLabel();
 }
 
 
@@ -1284,7 +1518,11 @@ void OscopePage_TimeDecrease(void)
     }
 
 
-    OscopePage_DrawLastSamples();
+    oscope_redraw_requested =
+        true;
+
+
+    OscopePage_UpdateInfoLabel();
 }
 
 
@@ -1303,7 +1541,17 @@ void OscopePage_VoltIncrease(void)
     }
 
 
-    OscopePage_DrawLastSamples();
+    /*
+     * Trigger line moves together with vertical scaling.
+     */
+    OscopePage_UpdateTriggerLine();
+
+
+    oscope_redraw_requested =
+        true;
+
+
+    OscopePage_UpdateInfoLabel();
 }
 
 
@@ -1319,7 +1567,14 @@ void OscopePage_VoltDecrease(void)
     }
 
 
-    OscopePage_DrawLastSamples();
+    OscopePage_UpdateTriggerLine();
+
+
+    oscope_redraw_requested =
+        true;
+
+
+    OscopePage_UpdateInfoLabel();
 }
 
 
@@ -1353,10 +1608,20 @@ void OscopePage_TriggerIncrease(void)
 
 
     /*
-     * Redraw immediately so the effect
-     * of Trigger + is visible.
+     * Move visible Trigger line immediately.
      */
-    OscopePage_DrawLastSamples();
+    OscopePage_UpdateTriggerLine();
+
+
+    /*
+     * Redraw waveform around the new trigger
+     * on the next timer cycle.
+     */
+    oscope_redraw_requested =
+        true;
+
+
+    OscopePage_UpdateInfoLabel();
 }
 
 
@@ -1390,7 +1655,14 @@ void OscopePage_TriggerDecrease(void)
         (uint16_t)new_level;
 
 
-    OscopePage_DrawLastSamples();
+    OscopePage_UpdateTriggerLine();
+
+
+    oscope_redraw_requested =
+        true;
+
+
+    OscopePage_UpdateInfoLabel();
 }
 
 
@@ -1411,9 +1683,12 @@ void OscopePage_ToggleRunStop(void)
         status =
             OscopeADC_Stop();
 
+
         (void)status;
 
-        oscope_running = false;
+
+        oscope_running =
+            false;
     }
     else
     {
@@ -1426,7 +1701,11 @@ void OscopePage_ToggleRunStop(void)
 
         if (status == HAL_OK)
         {
-            oscope_running = true;
+            oscope_running =
+                true;
+
+            oscope_redraw_requested =
+                true;
         }
     }
 

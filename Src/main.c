@@ -99,11 +99,6 @@ int main(void)
 
     /* USER CODE END SysInit */
 
-    /*
-     * Keep the original peripheral initialization order.
-     *
-     * This is important for the existing LCD/SPI system.
-     */
     MX_GPIO_Init();
     MX_DMA_Init();
     MX_SPI1_Init();
@@ -118,7 +113,6 @@ int main(void)
 
     /* USER CODE END 2 */
 
-    /* Infinite loop */
     /* USER CODE BEGIN WHILE */
 
     while (1)
@@ -143,9 +137,6 @@ void SystemClock_Config(void)
     RCC_OscInitTypeDef RCC_OscInitStruct = {0};
     RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-    /*
-     * Enable PWR clock.
-     */
     __HAL_RCC_PWR_CLK_ENABLE();
 
     __HAL_PWR_VOLTAGESCALING_CONFIG(
@@ -154,10 +145,6 @@ void SystemClock_Config(void)
 
     /*
      * HSI = 16 MHz
-     *
-     * PLLM = 8
-     * PLLN = 168
-     * PLLP = 2
      *
      * SYSCLK = 168 MHz
      */
@@ -193,10 +180,8 @@ void SystemClock_Config(void)
     /*
      * CPU  = 168 MHz
      * APB1 = 42 MHz
+     * TIM2 = 84 MHz
      * APB2 = 84 MHz
-     *
-     * Since APB1 prescaler != 1,
-     * TIM2 timer clock = 84 MHz.
      */
     RCC_ClkInitStruct.ClockType =
         RCC_CLOCKTYPE_HCLK |
@@ -236,40 +221,24 @@ static void MX_ADC1_Init(void)
 {
     ADC_ChannelConfTypeDef sConfig = {0};
 
-    /*
-     * ADC1
-     */
     hadc1.Instance =
         ADC1;
 
     /*
-     * ADC clock:
-     *
      * PCLK2 = 84 MHz
      * ADC clock = 84 / 4 = 21 MHz
      */
     hadc1.Init.ClockPrescaler =
         ADC_CLOCK_SYNC_PCLK_DIV4;
 
-    /*
-     * 12-bit ADC
-     */
     hadc1.Init.Resolution =
         ADC_RESOLUTION_12B;
 
-    /*
-     * Single channel
-     */
     hadc1.Init.ScanConvMode =
         DISABLE;
 
     /*
-     * IMPORTANT:
-     *
-     * Continuous mode must be DISABLED.
-     *
-     * Each conversion is started by
-     * TIM2 TRGO.
+     * One conversion per TIM2 trigger.
      */
     hadc1.Init.ContinuousConvMode =
         DISABLE;
@@ -278,12 +247,7 @@ static void MX_ADC1_Init(void)
         DISABLE;
 
     /*
-     * TIM2 TRGO -> ADC trigger
-     *
-     * TIM2 update frequency:
-     *
-     * 84 MHz / (419 + 1)
-     * = 200 kHz
+     * TIM2 TRGO -> ADC
      */
     hadc1.Init.ExternalTrigConvEdge =
         ADC_EXTERNALTRIGCONVEDGE_RISING;
@@ -291,27 +255,18 @@ static void MX_ADC1_Init(void)
     hadc1.Init.ExternalTrigConv =
         ADC_EXTERNALTRIGCONV_T2_TRGO;
 
-    /*
-     * Right aligned
-     */
     hadc1.Init.DataAlign =
         ADC_DATAALIGN_RIGHT;
 
-    /*
-     * One conversion
-     */
     hadc1.Init.NbrOfConversion =
         1;
 
     /*
-     * DMA must continue requesting data.
+     * DMA remains active in circular mode.
      */
     hadc1.Init.DMAContinuousRequests =
         ENABLE;
 
-    /*
-     * End of each conversion
-     */
     hadc1.Init.EOCSelection =
         ADC_EOC_SINGLE_CONV;
 
@@ -334,10 +289,7 @@ static void MX_ADC1_Init(void)
         1;
 
     /*
-     * 15 ADC cycles.
-     *
-     * With ADC clock = 21 MHz this is
-     * suitable for this test source.
+     * 15 cycles is enough for this test source.
      */
     sConfig.SamplingTime =
         ADC_SAMPLETIME_15CYCLES;
@@ -461,18 +413,14 @@ static void MX_TIM2_Init(void)
     TIM_MasterConfigTypeDef sMasterConfig = {0};
 
     /*
-     * TIM2 timer clock:
+     * TIM2 clock = 84 MHz
      *
-     * APB1 = 42 MHz
-     * Timer clock = 84 MHz
+     * New sample rate:
      *
-     * PSC = 0
-     * ARR = 419
+     * 84 MHz / (167 + 1)
+     * = 500 kHz
      *
-     * 84 MHz / (419 + 1)
-     * = 200 kHz
-     *
-     * Therefore one ADC trigger every 5 us.
+     * One sample every 2 us.
      */
     htim2.Instance =
         TIM2;
@@ -484,7 +432,7 @@ static void MX_TIM2_Init(void)
         TIM_COUNTERMODE_UP;
 
     htim2.Init.Period =
-        419;
+        167;
 
     htim2.Init.ClockDivision =
         TIM_CLOCKDIVISION_DIV1;
@@ -501,9 +449,6 @@ static void MX_TIM2_Init(void)
         Error_Handler();
     }
 
-    /*
-     * Internal timer clock
-     */
     sClockSourceConfig.ClockSource =
         TIM_CLOCKSOURCE_INTERNAL;
 
@@ -518,9 +463,7 @@ static void MX_TIM2_Init(void)
     }
 
     /*
-     * TIM2 Update Event -> TRGO
-     *
-     * ADC uses this as its external trigger.
+     * TIM2 UPDATE -> TRGO
      */
     sMasterConfig.MasterOutputTrigger =
         TIM_TRGO_UPDATE;
@@ -587,22 +530,10 @@ static void MX_USART1_UART_Init(void)
   */
 static void MX_DMA_Init(void)
 {
-    /*
-     * Enable DMA2 clock.
-     *
-     * DMA2 is used by:
-     *
-     * Stream0 -> ADC1
-     * Stream3 -> SPI1 TX
-     */
     __HAL_RCC_DMA2_CLK_ENABLE();
 
     /*
-     * ------------------------------------------------------
      * ADC1 DMA
-     * ------------------------------------------------------
-     *
-     * ADC1 -> DMA2 Stream0
      */
     HAL_NVIC_SetPriority(
         DMA2_Stream0_IRQn,
@@ -615,9 +546,7 @@ static void MX_DMA_Init(void)
     );
 
     /*
-     * ------------------------------------------------------
      * SPI1 TX DMA
-     * ------------------------------------------------------
      */
     HAL_NVIC_SetPriority(
         DMA2_Stream3_IRQn,
@@ -639,9 +568,6 @@ static void MX_GPIO_Init(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-    /*
-     * GPIO clocks
-     */
     __HAL_RCC_GPIOH_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();

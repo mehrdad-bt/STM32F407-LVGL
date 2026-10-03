@@ -6,10 +6,11 @@
 
 
 /* ==========================================================
- * External HAL handles
+ * External handles
  * ========================================================== */
 
 extern ADC_HandleTypeDef hadc1;
+extern DMA_HandleTypeDef hdma_adc1;
 extern TIM_HandleTypeDef htim2;
 
 
@@ -17,28 +18,8 @@ extern TIM_HandleTypeDef htim2;
  * DMA buffer
  * ========================================================== */
 
-/*
- * 1024 samples total
- *
- * Half  = 512 samples
- * Full  = 512 samples
- *
- * At 200 kHz:
- *
- * 512 samples = 2.56 ms
- */
 static uint16_t adc_dma_buffer[
     OSCOPE_ADC_DMA_BUFFER_SIZE
-];
-
-
-/*
- * آخرین بلوک کامل و پایدار.
- *
- * DMA مستقیماً در این بافر نمی‌نویسد.
- */
-static uint16_t latest_block[
-    OSCOPE_ADC_BLOCK_SIZE
 ];
 
 
@@ -46,48 +27,29 @@ static uint16_t latest_block[
  * State
  * ========================================================== */
 
-static volatile bool latest_block_ready = false;
-
 static volatile bool adc_running = false;
 
+/*
+ * آخرین نیمه‌ای که DMA کامل کرده:
+ *
+ * 0 = first half
+ * 1 = second half
+ */
+static volatile uint8_t latest_completed_half = 0U;
 
-/* ==========================================================
- * Copy DMA half into stable buffer
- * ========================================================== */
+/*
+ * هر بار که یک نیمه کامل شود، این counter زیاد می‌شود.
+ */
+static volatile uint32_t completed_block_counter = 0U;
 
-static void copy_dma_block(
-    const uint16_t *source
-)
-{
-    uint16_t i;
-
-
-    if (source == NULL)
-    {
-        return;
-    }
-
-
-    /*
-     * این copy داخل interrupt انجام می‌شود.
-     *
-     * 512 نمونه × 2 byte = 1024 byte
-     */
-    for (i = 0U;
-         i < OSCOPE_ADC_BLOCK_SIZE;
-         i++)
-    {
-        latest_block[i] =
-            source[i];
-    }
-
-
-    latest_block_ready = true;
-}
+/*
+ * آخرین block تحویل داده‌شده به OscopePage
+ */
+static uint32_t delivered_block_counter = 0U;
 
 
 /* ==========================================================
- * Start ADC + DMA + Timer
+ * Start
  * ========================================================== */
 
 HAL_StatusTypeDef OscopeADC_Start(void)
@@ -101,13 +63,15 @@ HAL_StatusTypeDef OscopeADC_Start(void)
     }
 
 
-    latest_block_ready = false;
+    latest_completed_half = 0U;
+
+    completed_block_counter = 0U;
+
+    delivered_block_counter = 0U;
 
 
     /*
-     * ADC + DMA
-     *
-     * DMA buffer is circular.
+     * ADC DMA شروع می‌شود.
      */
     status =
         HAL_ADC_Start_DMA(
@@ -124,8 +88,10 @@ HAL_StatusTypeDef OscopeADC_Start(void)
 
 
     /*
-     * ADC DMA must already be active
-     * before starting the trigger timer.
+     * سپس Timer شروع می‌شود.
+     *
+     * TIM2 TRGO
+     * -> ADC
      */
     status =
         HAL_TIM_Base_Start(
@@ -135,7 +101,9 @@ HAL_StatusTypeDef OscopeADC_Start(void)
 
     if (status != HAL_OK)
     {
-        HAL_ADC_Stop_DMA(&hadc1);
+        HAL_ADC_Stop_DMA(
+            &hadc1
+        );
 
         return status;
     }
@@ -149,7 +117,7 @@ HAL_StatusTypeDef OscopeADC_Start(void)
 
 
 /* ==========================================================
- * Stop ADC + DMA + Timer
+ * Stop
  * ========================================================== */
 
 HAL_StatusTypeDef OscopeADC_Stop(void)
@@ -165,7 +133,7 @@ HAL_StatusTypeDef OscopeADC_Stop(void)
 
 
     /*
-     * اول Trigger متوقف شود.
+     * اول Timer متوقف شود.
      */
     timer_status =
         HAL_TIM_Base_Stop(
@@ -174,7 +142,7 @@ HAL_StatusTypeDef OscopeADC_Stop(void)
 
 
     /*
-     * سپس ADC + DMA متوقف شود.
+     * سپس ADC + DMA.
      */
     adc_status =
         HAL_ADC_Stop_DMA(
@@ -183,8 +151,6 @@ HAL_StatusTypeDef OscopeADC_Stop(void)
 
 
     adc_running = false;
-
-    latest_block_ready = false;
 
 
     if (timer_status != HAL_OK)
@@ -198,7 +164,7 @@ HAL_StatusTypeDef OscopeADC_Stop(void)
 
 
 /* ==========================================================
- * Get latest complete block
+ * Get latest stable block
  * ========================================================== */
 
 bool OscopeADC_GetLatestBlock(
@@ -206,6 +172,13 @@ bool OscopeADC_GetLatestBlock(
     uint16_t destination_size
 )
 {
+    uint32_t sequence_snapshot;
+    uint32_t dma_remaining;
+
+    uint8_t safe_half;
+
+    uint16_t *source;
+
     uint16_t i;
 
 
@@ -215,44 +188,114 @@ bool OscopeADC_GetLatestBlock(
     }
 
 
-    if (destination_size <
-        OSCOPE_ADC_BLOCK_SIZE)
+    if (
+        destination_size <
+        OSCOPE_ADC_BLOCK_SIZE
+    )
+    {
+        return false;
+    }
+
+
+    if (!adc_running)
     {
         return false;
     }
 
 
     /*
-     * Callback ممکن است همزمان در حال تغییر latest_block
-     * باشد.
-     *
-     * برای copy حدود 1KB، موقتاً interrupt را متوقف می‌کنیم.
-     * این زمان در 168MHz بسیار کوتاه است.
+     * Snapshot interrupt state.
      */
     __disable_irq();
 
+    sequence_snapshot =
+        completed_block_counter;
 
-    if (!latest_block_ready)
+    __enable_irq();
+
+
+    /*
+     * هنوز block جدیدی نرسیده.
+     */
+    if (
+        sequence_snapshot ==
+        delivered_block_counter
+    )
     {
-        __enable_irq();
-
         return false;
     }
 
 
-    for (i = 0U;
-         i < OSCOPE_ADC_BLOCK_SIZE;
-         i++)
+    /*
+     * مقدار باقی‌مانده DMA را می‌خوانیم
+     * تا نیمه‌ای را انتخاب کنیم که
+     * در حال حاضر توسط DMA نوشته نمی‌شود.
+     *
+     * اگر NDTR > 1024 باشد:
+     *
+     * DMA در نیمه اول است،
+     * پس نیمه دوم امن است.
+     *
+     * اگر NDTR <= 1024 باشد:
+     *
+     * DMA در نیمه دوم است،
+     * پس نیمه اول امن است.
+     */
+    dma_remaining =
+        __HAL_DMA_GET_COUNTER(
+            &hdma_adc1
+        );
+
+
+    if (
+        dma_remaining >
+        OSCOPE_ADC_BLOCK_SIZE
+    )
     {
-        destination[i] =
-            latest_block[i];
+        safe_half = 1U;
+    }
+    else
+    {
+        safe_half = 0U;
     }
 
 
-    latest_block_ready = false;
+    if (safe_half == 0U)
+    {
+        source =
+            &adc_dma_buffer[0U];
+    }
+    else
+    {
+        source =
+            &adc_dma_buffer[
+                OSCOPE_ADC_BLOCK_SIZE
+            ];
+    }
 
 
-    __enable_irq();
+    /*
+     * این نیمه توسط DMA در این لحظه
+     * در حال نوشته‌شدن نیست.
+     *
+     * بنابراین CPU می‌تواند آن را کپی کند.
+     */
+    for (
+        i = 0U;
+        i < OSCOPE_ADC_BLOCK_SIZE;
+        i++
+    )
+    {
+        destination[i] =
+            source[i];
+    }
+
+
+    /*
+     * Sequence تحویل داده شد.
+     */
+    delivered_block_counter =
+        sequence_snapshot;
 
 
     return true;
@@ -260,7 +303,7 @@ bool OscopeADC_GetLatestBlock(
 
 
 /* ==========================================================
- * Compatibility function
+ * Compatibility API
  * ========================================================== */
 
 HAL_StatusTypeDef OscopeADC_ReadSamples(
@@ -268,30 +311,12 @@ HAL_StatusTypeDef OscopeADC_ReadSamples(
     uint16_t destination_size
 )
 {
-    bool result;
-
-
-    if (destination == NULL)
-    {
-        return HAL_ERROR;
-    }
-
-
-    if (destination_size <
-        OSCOPE_ADC_BLOCK_SIZE)
-    {
-        return HAL_ERROR;
-    }
-
-
-    result =
+    if (
         OscopeADC_GetLatestBlock(
             destination,
             destination_size
-        );
-
-
-    if (result)
+        )
+    )
     {
         return HAL_OK;
     }
@@ -302,9 +327,7 @@ HAL_StatusTypeDef OscopeADC_ReadSamples(
 
 
 /* ==========================================================
- * Read one sample
- *
- * Compatibility function
+ * Read one
  * ========================================================== */
 
 HAL_StatusTypeDef OscopeADC_ReadOne(
@@ -322,9 +345,12 @@ HAL_StatusTypeDef OscopeADC_ReadOne(
     }
 
 
-    if (!OscopeADC_GetLatestBlock(
+    if (
+        !OscopeADC_GetLatestBlock(
             temporary,
-            OSCOPE_ADC_BLOCK_SIZE))
+            OSCOPE_ADC_BLOCK_SIZE
+        )
+    )
     {
         return HAL_BUSY;
     }
@@ -371,7 +397,11 @@ bool OscopeADC_IsRunning(void)
 
 
 /* ==========================================================
- * DMA Half Transfer Callback
+ * DMA Half Complete
+ *
+ * IMPORTANT:
+ * Do NOT copy samples here.
+ * Keep ISR extremely short.
  * ========================================================== */
 
 void HAL_ADC_ConvHalfCpltCallback(
@@ -390,19 +420,19 @@ void HAL_ADC_ConvHalfCpltCallback(
     }
 
 
-    /*
-     * نیمه اول DMA:
-     *
-     * [0 ... 511]
-     */
-    copy_dma_block(
-        &adc_dma_buffer[0]
-    );
+    latest_completed_half =
+        0U;
+
+
+    completed_block_counter++;
 }
 
 
 /* ==========================================================
- * DMA Complete Callback
+ * DMA Complete
+ *
+ * IMPORTANT:
+ * Do NOT copy samples here.
  * ========================================================== */
 
 void HAL_ADC_ConvCpltCallback(
@@ -421,14 +451,9 @@ void HAL_ADC_ConvCpltCallback(
     }
 
 
-    /*
-     * نیمه دوم DMA:
-     *
-     * [512 ... 1023]
-     */
-    copy_dma_block(
-        &adc_dma_buffer[
-            OSCOPE_ADC_BLOCK_SIZE
-        ]
-    );
+    latest_completed_half =
+        1U;
+
+
+    completed_block_counter++;
 }
