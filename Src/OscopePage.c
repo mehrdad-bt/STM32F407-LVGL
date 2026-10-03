@@ -40,6 +40,26 @@
 
 
 /* ============================================================
+ * FREQUENCY MEASUREMENT
+ * ============================================================ */
+
+/*
+ * Minimum peak-to-peak amplitude (ADC counts) required
+ * before a frequency is reported. Below this the signal is
+ * considered noise / DC and "F:---" is shown.
+ *
+ * 100 counts is about 80 mV at 3.3 V full scale.
+ */
+#define FREQ_MIN_PP_COUNTS             100U
+
+/*
+ * Schmitt-trigger hysteresis = peak-to-peak / FREQ_HYST_DIVISOR
+ * on each side of the mid level.
+ */
+#define FREQ_HYST_DIVISOR              8U
+
+
+/* ============================================================
  * TIME / DIV
  * ============================================================ */
 
@@ -88,19 +108,6 @@ static const float volt_div_table[] =
 /*
  * Index 0 = slowest
  * Index 8 = fastest
- *
- * 4.0 s
- * 2.5 s
- * 1.5 s
- * 1.0 s
- * 0.5 s
- * 0.25 s
- * 0.125 s
- * 0.064 s
- * 0.016 s
- *
- * At 16 ms the whole waveform is drawn in one frame,
- * so the progressive drawing is practically invisible.
  */
 static const uint32_t sweep_duration_ms_table[] =
 {
@@ -153,18 +160,13 @@ static uint32_t sweep_speed_index = 0U;
 #define OSCOPE_TRIGGER_TEXT_COLOR      0x6699FFU
 #define OSCOPE_SWEEP_COLOR             0xFFAA44U
 #define OSCOPE_STATUS_COLOR            0xFFFFFFU
+#define OSCOPE_FREQ_COLOR              0xFF66FFU
 
 
 /* ============================================================
  * INFO FONT
  * ============================================================ */
 
-/*
- * Use Montserrat 10 when enabled in lv_conf.h.
- *
- * If it is disabled, use Montserrat 12, or LVGL default font.
- *
- */
 #if LV_FONT_MONTSERRAT_10
 
 #define OSCOPE_INFO_FONT \
@@ -255,6 +257,19 @@ static uint16_t sweep_global_max = 0U;
 
 
 /* ============================================================
+ * FREQUENCY RESULT
+ * ============================================================ */
+
+/*
+ * Last measured frequency in Hz.
+ * Valid only when measured_freq_valid == true.
+ */
+static uint32_t measured_freq_hz = 0U;
+
+static bool measured_freq_valid = false;
+
+
+/* ============================================================
  * CHART SERIES
  * ============================================================ */
 
@@ -296,6 +311,9 @@ static lv_obj_t *oscope_sweep_label =
     NULL;
 
 static lv_obj_t *oscope_status_label =
+    NULL;
+
+static lv_obj_t *oscope_freq_label =
     NULL;
 
 
@@ -447,7 +465,7 @@ static uint32_t get_view_sample_count(void)
 
 
     /*
-     * samples = time × sample rate.
+     * samples = time x sample rate.
      */
     sample_count =
         (
@@ -471,11 +489,6 @@ static uint32_t get_view_sample_count(void)
 
     /*
      * One oscilloscope block contains OSCOPE_ADC_BLOCK_SIZE samples.
-     *
-     * With the current 500 kS/s ADC capture, the maximum
-     * reliable horizontal window is about 2.048 ms.
-     * Therefore the largest Time/Div option is intentionally
-     * kept at 200 us/div (2 ms total).
      */
     if (
         sample_count >
@@ -575,6 +588,288 @@ static uint32_t find_trigger_index(
      */
     return
         sample_count / 2U;
+}
+
+
+/* ============================================================
+ * FREQUENCY MEASUREMENT
+ *
+ * Method:
+ *   1. Find min / max of the whole ADC block.
+ *   2. If peak-to-peak is too small -> no signal.
+ *   3. Mid level = (min + max) / 2.
+ *      Schmitt trigger with hysteresis = pp / 8.
+ *   4. Detect every rising crossing of the upper threshold.
+ *      Each crossing position is linearly interpolated
+ *      between two samples (sub-sample accuracy).
+ *   5. frequency = (crossings - 1) * fs
+ *                  / (last_position - first_position)
+ *
+ * Using many periods gives high accuracy.
+ * Minimum measurable frequency is about 2 / 16.384 ms = 122 Hz
+ * (two rising edges must fall inside one block).
+ * ============================================================ */
+
+static bool measure_frequency(
+    const uint16_t *samples,
+    uint32_t sample_count,
+    uint32_t *freq_hz
+)
+{
+    uint32_t i;
+
+    uint16_t vmin;
+    uint16_t vmax;
+
+    uint32_t pp;
+    uint32_t mid;
+    uint32_t hyst;
+    uint32_t high_th;
+    uint32_t low_th;
+
+    bool state_high;
+
+    uint32_t crossings;
+
+    float first_pos;
+    float last_pos;
+    float pos;
+
+    float span;
+    float freq;
+
+
+    if (
+        samples == NULL ||
+        freq_hz == NULL ||
+        sample_count < 4U
+    )
+    {
+        return false;
+    }
+
+
+    /*
+     * Min / max.
+     */
+    vmin =
+        samples[0];
+
+    vmax =
+        samples[0];
+
+
+    for (
+        i = 1U;
+        i < sample_count;
+        i++
+    )
+    {
+        if (
+            samples[i] <
+            vmin
+        )
+        {
+            vmin =
+                samples[i];
+        }
+
+
+        if (
+            samples[i] >
+            vmax
+        )
+        {
+            vmax =
+                samples[i];
+        }
+    }
+
+
+    pp =
+        (uint32_t)vmax -
+        (uint32_t)vmin;
+
+
+    if (
+        pp <
+        FREQ_MIN_PP_COUNTS
+    )
+    {
+        return false;
+    }
+
+
+    mid =
+        ((uint32_t)vmax +
+         (uint32_t)vmin) / 2U;
+
+
+    hyst =
+        pp / FREQ_HYST_DIVISOR;
+
+
+    if (
+        hyst < 1U
+    )
+    {
+        hyst = 1U;
+    }
+
+
+    high_th =
+        mid + hyst;
+
+    low_th =
+        mid - hyst;
+
+
+    /*
+     * Initial Schmitt state from first sample.
+     */
+    state_high =
+        (samples[0] >= mid);
+
+
+    crossings =
+        0U;
+
+    first_pos =
+        0.0f;
+
+    last_pos =
+        0.0f;
+
+
+    for (
+        i = 1U;
+        i < sample_count;
+        i++
+    )
+    {
+        uint32_t s0;
+        uint32_t s1;
+
+
+        s0 =
+            samples[i - 1U];
+
+        s1 =
+            samples[i];
+
+
+        if (
+            state_high
+        )
+        {
+            if (
+                s1 <= low_th
+            )
+            {
+                state_high =
+                    false;
+            }
+        }
+        else
+        {
+            if (
+                s1 >= high_th
+            )
+            {
+                state_high =
+                    true;
+
+
+                /*
+                 * Rising crossing of high_th,
+                 * interpolated between sample i-1 and i.
+                 * If s0 is already >= high_th (slow rise after
+                 * hysteresis), clamp fraction to 0.
+                 */
+                if (
+                    s1 > s0 &&
+                    high_th > s0
+                )
+                {
+                    pos =
+                        (float)(i - 1U) +
+                        (
+                            (float)(high_th - s0) /
+                            (float)(s1 - s0)
+                        );
+                }
+                else
+                {
+                    pos =
+                        (float)i;
+                }
+
+
+                if (
+                    crossings == 0U
+                )
+                {
+                    first_pos =
+                        pos;
+                }
+
+
+                last_pos =
+                    pos;
+
+
+                crossings++;
+            }
+        }
+    }
+
+
+    /*
+     * Need at least two rising edges (one full period).
+     */
+    if (
+        crossings < 2U
+    )
+    {
+        return false;
+    }
+
+
+    span =
+        last_pos -
+        first_pos;
+
+
+    if (
+        span <= 0.0f
+    )
+    {
+        return false;
+    }
+
+
+    freq =
+        (
+            (float)(crossings - 1U) *
+            (float)OscopeADC_GetSampleRate()
+        )
+        /
+        span;
+
+
+    if (
+        freq < 1.0f
+    )
+    {
+        return false;
+    }
+
+
+    *freq_hz =
+        (uint32_t)(freq + 0.5f);
+
+
+    return true;
 }
 
 
@@ -891,6 +1186,79 @@ static void update_trigger_line(void)
 
 
 /* ============================================================
+ * HELPER: CREATE ONE INFO LABEL
+ * ============================================================ */
+
+static lv_obj_t *create_info_label(
+    lv_obj_t *parent,
+    lv_coord_t x,
+    lv_coord_t y,
+    lv_coord_t w,
+    lv_coord_t h,
+    uint32_t color,
+    const char *initial_text
+)
+{
+    lv_obj_t *label;
+
+
+    label =
+        lv_label_create(
+            parent
+        );
+
+
+    if (
+        label == NULL
+    )
+    {
+        return NULL;
+    }
+
+
+    lv_obj_set_pos(
+        label,
+        x,
+        y
+    );
+
+
+    lv_obj_set_size(
+        label,
+        w,
+        h
+    );
+
+
+    lv_obj_set_style_text_font(
+        label,
+        OSCOPE_INFO_FONT,
+        LV_PART_MAIN |
+        LV_STATE_DEFAULT
+    );
+
+
+    lv_obj_set_style_text_color(
+        label,
+        lv_color_hex(
+            color
+        ),
+        LV_PART_MAIN |
+        LV_STATE_DEFAULT
+    );
+
+
+    lv_label_set_text(
+        label,
+        initial_text
+    );
+
+
+    return label;
+}
+
+
+/* ============================================================
  * CREATE INFO BOX
  * ============================================================ */
 
@@ -941,6 +1309,19 @@ static void create_info_box(void)
             oscope_info_box,
             124,
             48
+        );
+
+
+        /*
+         * No internal padding, so children coordinates
+         * start exactly at the box corner and nothing
+         * is clipped.
+         */
+        lv_obj_set_style_pad_all(
+            oscope_info_box,
+            0,
+            LV_PART_MAIN |
+            LV_STATE_DEFAULT
         );
 
 
@@ -1019,52 +1400,12 @@ static void create_info_box(void)
     )
     {
         oscope_time_label =
-            lv_label_create(
-                oscope_info_box
-            );
-
-
-        if (
-            oscope_time_label != NULL
-        )
-        {
-            lv_obj_set_pos(
-                oscope_time_label,
-                3,
-                0
-            );
-
-
-            lv_obj_set_size(
-                oscope_time_label,
-                58,
-                12
-            );
-
-
-            lv_obj_set_style_text_font(
-                oscope_time_label,
-                OSCOPE_INFO_FONT,
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_obj_set_style_text_color(
-                oscope_time_label,
-                lv_color_hex(
-                    OSCOPE_TIME_COLOR
-                ),
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_label_set_text(
-                oscope_time_label,
+            create_info_label(
+                oscope_info_box,
+                3, 0, 58, 12,
+                OSCOPE_TIME_COLOR,
                 "TIME"
             );
-        }
     }
 
 
@@ -1077,52 +1418,12 @@ static void create_info_box(void)
     )
     {
         oscope_volt_label =
-            lv_label_create(
-                oscope_info_box
-            );
-
-
-        if (
-            oscope_volt_label != NULL
-        )
-        {
-            lv_obj_set_pos(
-                oscope_volt_label,
-                63,
-                0
-            );
-
-
-            lv_obj_set_size(
-                oscope_volt_label,
-                61,
-                12
-            );
-
-
-            lv_obj_set_style_text_font(
-                oscope_volt_label,
-                OSCOPE_INFO_FONT,
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_obj_set_style_text_color(
-                oscope_volt_label,
-                lv_color_hex(
-                    OSCOPE_VOLT_COLOR
-                ),
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_label_set_text(
-                oscope_volt_label,
+            create_info_label(
+                oscope_info_box,
+                63, 0, 61, 12,
+                OSCOPE_VOLT_COLOR,
                 "VOLT"
             );
-        }
     }
 
 
@@ -1135,52 +1436,12 @@ static void create_info_box(void)
     )
     {
         oscope_trigger_label =
-            lv_label_create(
-                oscope_info_box
-            );
-
-
-        if (
-            oscope_trigger_label != NULL
-        )
-        {
-            lv_obj_set_pos(
-                oscope_trigger_label,
-                3,
-                12
-            );
-
-
-            lv_obj_set_size(
-                oscope_trigger_label,
-                58,
-                12
-            );
-
-
-            lv_obj_set_style_text_font(
-                oscope_trigger_label,
-                OSCOPE_INFO_FONT,
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_obj_set_style_text_color(
-                oscope_trigger_label,
-                lv_color_hex(
-                    OSCOPE_TRIGGER_TEXT_COLOR
-                ),
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_label_set_text(
-                oscope_trigger_label,
+            create_info_label(
+                oscope_info_box,
+                3, 12, 58, 12,
+                OSCOPE_TRIGGER_TEXT_COLOR,
                 "TRIG"
             );
-        }
     }
 
 
@@ -1193,52 +1454,12 @@ static void create_info_box(void)
     )
     {
         oscope_sweep_label =
-            lv_label_create(
-                oscope_info_box
-            );
-
-
-        if (
-            oscope_sweep_label != NULL
-        )
-        {
-            lv_obj_set_pos(
-                oscope_sweep_label,
-                63,
-                12
-            );
-
-
-            lv_obj_set_size(
-                oscope_sweep_label,
-                58,
-                12
-            );
-
-
-            lv_obj_set_style_text_font(
-                oscope_sweep_label,
-                OSCOPE_INFO_FONT,
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_obj_set_style_text_color(
-                oscope_sweep_label,
-                lv_color_hex(
-                    OSCOPE_SWEEP_COLOR
-                ),
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_label_set_text(
-                oscope_sweep_label,
+            create_info_label(
+                oscope_info_box,
+                63, 12, 58, 12,
+                OSCOPE_SWEEP_COLOR,
                 "SW"
             );
-        }
     }
 
 
@@ -1251,52 +1472,30 @@ static void create_info_box(void)
     )
     {
         oscope_status_label =
-            lv_label_create(
-                oscope_info_box
-            );
-
-
-        if (
-            oscope_status_label != NULL
-        )
-        {
-            lv_obj_set_pos(
-                oscope_status_label,
-                3,
-                24
-            );
-
-
-            lv_obj_set_size(
-                oscope_status_label,
-                118,
-                12
-            );
-
-
-            lv_obj_set_style_text_font(
-                oscope_status_label,
-                OSCOPE_INFO_FONT,
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_obj_set_style_text_color(
-                oscope_status_label,
-                lv_color_hex(
-                    OSCOPE_STATUS_COLOR
-                ),
-                LV_PART_MAIN |
-                LV_STATE_DEFAULT
-            );
-
-
-            lv_label_set_text(
-                oscope_status_label,
+            create_info_label(
+                oscope_info_box,
+                3, 24, 40, 12,
+                OSCOPE_STATUS_COLOR,
                 "STOP"
             );
-        }
+    }
+
+
+    /* --------------------------------------------------------
+     * FREQUENCY
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_freq_label == NULL
+    )
+    {
+        oscope_freq_label =
+            create_info_label(
+                oscope_info_box,
+                45, 24, 76, 12,
+                OSCOPE_FREQ_COLOR,
+                "F:---"
+            );
     }
 }
 
@@ -1436,6 +1635,8 @@ static void update_info_box(void)
 
     /* --------------------------------------------------------
      * SWEEP
+     *
+     * Integer math only (no %f).
      * -------------------------------------------------------- */
 
     if (
@@ -1450,12 +1651,9 @@ static void update_info_box(void)
             snprintf(
                 text,
                 sizeof(text),
-                "SW:%.1fs",
-                (
-                    (double)sweep_ms
-                    /
-                    1000.0
-                )
+                "SW:%lu.%lus",
+                (unsigned long)(sweep_ms / 1000U),
+                (unsigned long)((sweep_ms % 1000U) / 100U)
             );
         }
         else
@@ -1499,6 +1697,72 @@ static void update_info_box(void)
                 : lv_color_hex(0xFFFFFF),
             LV_PART_MAIN |
             LV_STATE_DEFAULT
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * FREQUENCY
+     *
+     * < 1 kHz      -> "F:123Hz"
+     * 1k .. 1 MHz  -> "F:12.34kHz"
+     * Integer math only.
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_freq_label != NULL
+    )
+    {
+        if (
+            !measured_freq_valid
+        )
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "F:---"
+            );
+        }
+        else if (
+            measured_freq_hz <
+            1000U
+        )
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "F:%luHz",
+                (unsigned long)measured_freq_hz
+            );
+        }
+        else if (
+            measured_freq_hz <
+            1000000U
+        )
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "F:%lu.%02lukHz",
+                (unsigned long)(measured_freq_hz / 1000U),
+                (unsigned long)((measured_freq_hz % 1000U) / 10U)
+            );
+        }
+        else
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "F:%lu.%02luMHz",
+                (unsigned long)(measured_freq_hz / 1000000U),
+                (unsigned long)((measured_freq_hz % 1000000U) / 10000U)
+            );
+        }
+
+
+        lv_label_set_text(
+            oscope_freq_label,
+            text
         );
     }
 }
@@ -1597,6 +1861,8 @@ static bool prepare_new_sweep(void)
 
     uint32_t i;
 
+    uint32_t freq_hz;
+
 
     /*
      * Get newest safe DMA block.
@@ -1609,6 +1875,34 @@ static bool prepare_new_sweep(void)
     )
     {
         return false;
+    }
+
+
+    /*
+     * Frequency is measured from the WHOLE block,
+     * independent of Time/Div and Volt/Div.
+     */
+    if (
+        measure_frequency(
+            latest_block,
+            OSCOPE_ADC_BLOCK_SIZE,
+            &freq_hz
+        )
+    )
+    {
+        measured_freq_hz =
+            freq_hz;
+
+        measured_freq_valid =
+            true;
+    }
+    else
+    {
+        measured_freq_hz =
+            0U;
+
+        measured_freq_valid =
+            false;
     }
 
 
@@ -1938,7 +2232,7 @@ static bool prepare_new_sweep(void)
 
 
     /*
-     * Update info.
+     * Update info (includes frequency).
      */
     update_info_box();
 
@@ -2140,6 +2434,16 @@ void OscopePage_OnEnter(void)
 
     oscope_active =
         true;
+
+
+    /*
+     * Reset frequency display.
+     */
+    measured_freq_hz =
+        0U;
+
+    measured_freq_valid =
+        false;
 
 
     /*
