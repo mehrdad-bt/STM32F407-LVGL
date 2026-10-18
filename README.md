@@ -1,1 +1,1 @@
-Osiloscope added - edited internal adc
+added Auto button in osilloscope
