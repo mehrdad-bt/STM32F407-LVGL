@@ -27,6 +27,13 @@ void OscopePage_ToggleRunStop(void);
 void OscopePage_SweepIncrease(void);
 void OscopePage_SweepDecrease(void);
 
+/* Waveform averaging: OFF -> 4 -> 16 -> 64 acquisitions */
+void OscopePage_AvgIncrease(void);
+void OscopePage_AvgDecrease(void);
+
+/* Auto setup: finds Time/Div, Volt/Div and trigger level by itself */
+void OscopePage_Auto(void);
+
 void OscopePage_Task(void);
 
 #ifdef __cplusplus

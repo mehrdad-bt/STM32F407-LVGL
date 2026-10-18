@@ -49,6 +49,11 @@ extern "C" {
  */
 #define OSCOPE_ADC_SAMPLE_RATE_HZ   OSCOPE_ADC_DEFAULT_SAMPLE_RATE_HZ
 
+/*
+ * Supply / reference voltage used when VDDA could not be measured.
+ */
+#define OSCOPE_ADC_VDDA_NOMINAL_MV         3300U
+
 HAL_StatusTypeDef OscopeADC_Start(void);
 void OscopeADC_Stop(void);
 
@@ -69,9 +74,40 @@ bool OscopeADC_GetLatestBlock(
 );
 
 /*
+ * Same as OscopeADC_GetLatestBlock(), and also returns the number
+ * of the block (it increases by one for every completed block).
+ *
+ * The caller can see whether a block is new or the same one it
+ * already used.  Needed for waveform averaging.
+ */
+bool OscopeADC_GetLatestBlockSeq(
+    uint16_t *destination,
+    uint32_t destination_size,
+    uint32_t *sequence
+);
+
+/*
  * Actual rate (rounded to an integer timer period).
  */
 uint32_t OscopeADC_GetSampleRate(void);
+
+/*
+ * ADC reference voltage (VDDA) in millivolts.
+ *
+ * Measured with the internal VREFINT channel every time the ADC is
+ * started, using the factory calibration value stored in flash.
+ *
+ * Voltage in mV = ADC counts x OscopeADC_GetVdda_mV() / 4095
+ *
+ * Until a valid measurement exists the nominal 3300 mV is returned.
+ */
+uint32_t OscopeADC_GetVdda_mV(void);
+
+/*
+ * true  = value comes from a VREFINT measurement.
+ * false = nominal 3300 mV (no valid calibration or measurement).
+ */
+bool OscopeADC_IsVddaMeasured(void);
 
 #ifdef __cplusplus
 }

@@ -31,6 +31,37 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+/*
+ * External crystal frequency in MHz (the crystal soldered on the board,
+ * next to the OSC_IN / OSC_OUT pins PH0 / PH1).
+ *
+ * IMPORTANT:
+ *   HSE_VALUE in stm32f4xx_hal_conf.h must be the same value
+ *   (e.g. 8000000U for an 8 MHz crystal).  The check below stops
+ *   the build when they differ, because a wrong value would make
+ *   SYSCLK, SPI, timers and the oscilloscope time base wrong.
+ *
+ * Use 8 for an 8 MHz crystal, 12 for 12 MHz, 16 for 16 MHz,
+ * 25 for 25 MHz.
+ */
+#define OSCOPE_HSE_MHZ      8U
+
+/*
+ * Uncomment when the board has an external active oscillator
+ * (clock signal on OSC_IN, no crystal).
+ */
+/* #define OSCOPE_HSE_BYPASS */
+
+_Static_assert(
+    HSE_VALUE == (OSCOPE_HSE_MHZ * 1000000U),
+    "HSE_VALUE in stm32f4xx_hal_conf.h must match OSCOPE_HSE_MHZ in main.c"
+);
+
+_Static_assert(
+    (OSCOPE_HSE_MHZ >= 2U) && (OSCOPE_HSE_MHZ <= 63U),
+    "OSCOPE_HSE_MHZ must be between 2 and 63 (PLLM range)"
+);
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,6 +84,13 @@ TIM_HandleTypeDef htim2;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
+
+/*
+ * 1 = system runs from the external crystal (HSE).
+ * 0 = HSE did not start, system fell back to the internal HSI.
+ * (Look at it in the debugger.)
+ */
+volatile uint8_t g_clock_hse_active = 0U;
 
 /* USER CODE END PV */
 
@@ -144,44 +182,109 @@ void SystemClock_Config(void)
     );
 
     /*
-     * HSI = 16 MHz
+     * ------------------------------------------------------
+     * Primary clock source: external crystal (HSE)
+     * ------------------------------------------------------
      *
-     * SYSCLK = 168 MHz
+     * HSE / PLLM = 1 MHz   (VCO input)
+     * VCO        = 1 MHz x 336 = 336 MHz
+     * SYSCLK     = 336 MHz / 2 = 168 MHz
+     * USB / SDIO = 336 MHz / 7 =  48 MHz
+     *
+     * PLLM equals the crystal frequency in MHz, so the VCO input
+     * is always 1 MHz and the same PLLN works for 8, 12, 16, 25 MHz.
+     *
+     * The crystal accuracy is tens of ppm, the internal HSI only
+     * about 1 %.  ADC sample rate, frequency counter and Time/Div
+     * all follow this clock.
      */
     RCC_OscInitStruct.OscillatorType =
-        RCC_OSCILLATORTYPE_HSI;
+        RCC_OSCILLATORTYPE_HSE;
 
-    RCC_OscInitStruct.HSIState =
-        RCC_HSI_ON;
-
-    RCC_OscInitStruct.HSICalibrationValue =
-        RCC_HSICALIBRATION_DEFAULT;
+#ifdef OSCOPE_HSE_BYPASS
+    RCC_OscInitStruct.HSEState =
+        RCC_HSE_BYPASS;
+#else
+    RCC_OscInitStruct.HSEState =
+        RCC_HSE_ON;
+#endif
 
     RCC_OscInitStruct.PLL.PLLState =
         RCC_PLL_ON;
 
     RCC_OscInitStruct.PLL.PLLSource =
-        RCC_PLLSOURCE_HSI;
+        RCC_PLLSOURCE_HSE;
 
-    RCC_OscInitStruct.PLL.PLLM = 8;
-    RCC_OscInitStruct.PLL.PLLN = 168;
+    RCC_OscInitStruct.PLL.PLLM = OSCOPE_HSE_MHZ;
+    RCC_OscInitStruct.PLL.PLLN = 336;
     RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-    RCC_OscInitStruct.PLL.PLLQ = 4;
+    RCC_OscInitStruct.PLL.PLLQ = 7;
 
     if (
         HAL_RCC_OscConfig(
             &RCC_OscInitStruct
-        ) != HAL_OK
+        ) == HAL_OK
     )
     {
-        Error_Handler();
+        g_clock_hse_active = 1U;
+    }
+    else
+    {
+        /*
+         * ------------------------------------------------------
+         * Fallback: crystal did not start (or PLL did not lock)
+         * ------------------------------------------------------
+         *
+         * Run from the internal HSI so the device still works:
+         *
+         * HSI = 16 MHz
+         * HSI / 8 = 2 MHz, x 168 = 336 MHz, / 2 = 168 MHz
+         *
+         * The HSE is switched off again.
+         */
+        RCC_OscInitStruct = (RCC_OscInitTypeDef){0};
+
+        RCC_OscInitStruct.OscillatorType =
+            RCC_OSCILLATORTYPE_HSE |
+            RCC_OSCILLATORTYPE_HSI;
+
+        RCC_OscInitStruct.HSEState =
+            RCC_HSE_OFF;
+
+        RCC_OscInitStruct.HSIState =
+            RCC_HSI_ON;
+
+        RCC_OscInitStruct.HSICalibrationValue =
+            RCC_HSICALIBRATION_DEFAULT;
+
+        RCC_OscInitStruct.PLL.PLLState =
+            RCC_PLL_ON;
+
+        RCC_OscInitStruct.PLL.PLLSource =
+            RCC_PLLSOURCE_HSI;
+
+        RCC_OscInitStruct.PLL.PLLM = 8;
+        RCC_OscInitStruct.PLL.PLLN = 168;
+        RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+        RCC_OscInitStruct.PLL.PLLQ = 7;
+
+        if (
+            HAL_RCC_OscConfig(
+                &RCC_OscInitStruct
+            ) != HAL_OK
+        )
+        {
+            Error_Handler();
+        }
+
+        g_clock_hse_active = 0U;
     }
 
     /*
      * CPU  = 168 MHz
-     * APB1 = 42 MHz
-     * TIM2 = 84 MHz
+     * APB1 = 42 MHz  (timers: 84 MHz)
      * APB2 = 84 MHz
+     * TIM2 = 84 MHz
      */
     RCC_ClkInitStruct.ClockType =
         RCC_CLOCKTYPE_HCLK |

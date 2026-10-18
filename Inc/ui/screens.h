@@ -51,6 +51,8 @@ typedef struct _objects_t {
     lv_obj_t *stop_run_btn;
     lv_obj_t *obj0;
     lv_obj_t *obj1;
+    lv_obj_t *auto_button;
+    lv_obj_t *auto_button_text;
 } objects_t;
 
 extern objects_t objects;

@@ -186,6 +186,8 @@ static uint32_t sweep_speed_index = 0U;
 #define OSCOPE_FREQ_COLOR              0xFF66FFU
 #define OSCOPE_VPP_COLOR               0xFFD966U
 #define OSCOPE_VRMS_COLOR              0x66FFCCU
+#define OSCOPE_AVG_COLOR               0xFF9966U
+#define OSCOPE_VDD_COLOR               0x99CCFFU
 
 
 /* ============================================================
@@ -219,6 +221,60 @@ static uint32_t sweep_speed_index = 0U;
 #define TRIGGER_MAX                    3967U
 #define TRIGGER_HYSTERESIS             32U
 #define TRIGGER_PRE_PERCENT            30U
+
+
+/* ============================================================
+ * VOLTAGE SCALE
+ * ============================================================ */
+
+/*
+ * Voltage at the vertical center of the screen (absolute volts).
+ */
+#define OSCOPE_CENTER_MV               1650U
+
+
+/* ============================================================
+ * AVERAGING DEFAULT
+ * ============================================================ */
+
+/*
+ * AVG level after power-up:
+ *   0 = off, 1 = 4 acquisitions, 2 = 16, 3 = 64
+ *
+ * OscopePage_AvgIncrease() / OscopePage_AvgDecrease() change it
+ * at run time (connect them to a button).
+ */
+#define OSCOPE_AVG_DEFAULT_LEVEL       0U
+
+
+/* ============================================================
+ * CCM RAM
+ * ============================================================ */
+
+/*
+ * The STM32F407 has 128 KB of normal RAM and a separate 64 KB
+ * CCM RAM (0x10000000). The CPU can use CCM at full speed, but
+ * DMA cannot reach it.
+ *
+ * The big arrays below are only used by the CPU, so they are
+ * placed in CCM and leave the normal RAM to the DMA buffer
+ * (32 KB), LVGL and the rest.
+ *
+ * Needs a ".ccmram" section in the linker script
+ * (STM32F407VGTX_FLASH.ld has it by default).
+ * Set OSCOPE_USE_CCM to 0 to put everything in normal RAM.
+ *
+ * Never put a DMA buffer in CCM.
+ */
+#ifndef OSCOPE_USE_CCM
+#define OSCOPE_USE_CCM                 1
+#endif
+
+#if OSCOPE_USE_CCM
+#define OSCOPE_CCM __attribute__((section(".ccmram")))
+#else
+#define OSCOPE_CCM
+#endif
 
 
 /* ============================================================
@@ -258,7 +314,7 @@ static uint16_t trigger_level =
  */
 static uint16_t latest_block[
     OSCOPE_ADC_BLOCK_SIZE
-];
+] OSCOPE_CCM;
 
 
 /*
@@ -266,11 +322,11 @@ static uint16_t latest_block[
  */
 static uint16_t sweep_min_values[
     OSCOPE_POINTS
-];
+] OSCOPE_CCM;
 
 static uint16_t sweep_max_values[
     OSCOPE_POINTS
-];
+] OSCOPE_CCM;
 
 
 /*
@@ -322,6 +378,98 @@ static uint32_t applied_rate_hz = 0U;
  * new rate is not complete yet.
  */
 static bool data_waiting = false;
+
+
+/* ============================================================
+ * AUTO SETUP STATE
+ * ============================================================ */
+
+/*
+ * Sample rates tried (fast -> slow) while looking for the
+ * signal frequency. Fast rates see high frequencies, slow
+ * rates have a long block and see low frequencies.
+ */
+static const uint32_t auto_rate_table[] =
+{
+    700000U,
+    80000U,
+    8000U,
+    4000U
+};
+
+#define AUTO_RATE_COUNT \
+    (sizeof(auto_rate_table) / \
+     sizeof(auto_rate_table[0]))
+
+/*
+ * Periods wanted on screen (10 divisions).
+ */
+#define AUTO_TARGET_PERIODS            3U
+
+static bool auto_active = false;
+
+static uint32_t auto_rate_idx = 0U;
+
+static uint32_t auto_wait_frames = 0U;
+
+/*
+ * Voltage at the vertical screen center (mV).
+ * Auto setup moves it to the middle of the signal.
+ */
+static uint32_t center_mv = OSCOPE_CENTER_MV;
+
+/*
+ * Signal height wanted by Auto (tenths of a division, 60 = 6 div).
+ */
+#define AUTO_PP_TENTHS_DIV             60U
+
+
+/* ============================================================
+ * AVERAGING STATE
+ * ============================================================ */
+
+/*
+ * Number of acquisitions in the running average.
+ * Index 0 = AVG off.
+ */
+static const uint32_t avg_count_table[] =
+{
+    1U,
+    4U,
+    16U,
+    64U
+};
+
+#define AVG_LEVEL_COUNT \
+    (sizeof(avg_count_table) / \
+     sizeof(avg_count_table[0]))
+
+static uint32_t avg_level_index =
+    OSCOPE_AVG_DEFAULT_LEVEL;
+
+/*
+ * Running average of the 299 screen points, in ADC counts.
+ */
+static float avg_acc[
+    OSCOPE_POINTS
+] OSCOPE_CCM;
+
+/*
+ * Newest single acquisition, in ADC counts.
+ */
+static float cur_values[
+    OSCOPE_POINTS
+] OSCOPE_CCM;
+
+/*
+ * How many acquisitions are in avg_acc (0 = empty).
+ */
+static uint32_t avg_n = 0U;
+
+/*
+ * Number of the last block that was added to the average.
+ */
+static uint32_t avg_last_seq = 0U;
 
 
 /* ============================================================
@@ -377,6 +525,12 @@ static lv_obj_t *oscope_vpp_label =
 static lv_obj_t *oscope_vrms_label =
     NULL;
 
+static lv_obj_t *oscope_avg_label =
+    NULL;
+
+static lv_obj_t *oscope_vdd_label =
+    NULL;
+
 
 /* ============================================================
  * DISPLAY TIMER
@@ -414,8 +568,15 @@ static uint32_t sweep_frame_counter =
  * SCALE ADC FOR VOLT/DIV
  * ============================================================ */
 
-static uint16_t scale_adc_for_display(
-    uint16_t adc_value
+/*
+ * adc_value: ADC counts (may be fractional after averaging).
+ * Returns the chart coordinate 0..4095.
+ *
+ * The ADC reference is VDDA, measured with VREFINT, so the
+ * voltage is correct even when the supply is not exactly 3.3 V.
+ */
+static uint16_t scale_adc_f_for_display(
+    float adc_value
 )
 {
     float volt_div;
@@ -446,18 +607,23 @@ static uint16_t scale_adc_for_display(
      */
     input_v =
         (
-            (float)adc_value *
-            3.3f
+            adc_value *
+            (float)OscopeADC_GetVdda_mV()
         )
         /
-        4095.0f;
+        (
+            4095.0f *
+            1000.0f
+        );
 
 
     /*
-     * Screen center = 1.65 V.
+     * Screen center.
      */
     center_v =
-        1.65f;
+        (float)center_mv
+        /
+        1000.0f;
 
 
     /*
@@ -499,7 +665,18 @@ static uint16_t scale_adc_for_display(
 
 
     return
-        (uint16_t)scaled;
+        (uint16_t)(scaled + 0.5f);
+}
+
+
+static uint16_t scale_adc_for_display(
+    uint16_t adc_value
+)
+{
+    return
+        scale_adc_f_for_display(
+            (float)adc_value
+        );
 }
 
 
@@ -942,6 +1119,8 @@ static void compute_block_stats(
 
     uint64_t ms_mv2;
 
+    uint32_t vdda;
+
 
     if (
         samples == NULL ||
@@ -1000,11 +1179,18 @@ static void compute_block_stats(
     }
 
 
+    /*
+     * Reference voltage measured with VREFINT.
+     */
+    vdda =
+        OscopeADC_GetVdda_mV();
+
+
     meas_vpp_mv =
         (
             (uint32_t)(vmax - vmin)
             *
-            3300U
+            vdda
         )
         /
         4095U;
@@ -1012,16 +1198,18 @@ static void compute_block_stats(
 
     /*
      * mean square in mV^2:
-     * sum_sq / N * (3300 / 4095)^2
+     * sum_sq / N * (vdda / 4095)^2
      *
-     * 4095^2 = 16769025, 3300^2 = 10890000
+     * 4095^2 = 16769025
      * sum_sq max = 8192 * 4095^2 = 1.37e11
-     * 1.37e11 * 1.089e7 = 1.5e18  (fits in uint64)
+     * vdda^2 max = 3600^2 = 1.3e7
+     * 1.37e11 * 1.3e7 = 1.8e18  (fits in uint64)
      */
     ms_mv2 =
         (
             sum_sq *
-            10890000ULL
+            (uint64_t)vdda *
+            (uint64_t)vdda
         )
         /
         (
@@ -1783,7 +1971,7 @@ static void create_info_box(void)
         lv_obj_set_size(
             oscope_info_box,
             124,
-            60
+            64
         );
 
 
@@ -2008,6 +2196,42 @@ static void create_info_box(void)
                 "Vrms:---"
             );
     }
+
+
+    /* --------------------------------------------------------
+     * AVG
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_avg_label == NULL
+    )
+    {
+        oscope_avg_label =
+            create_info_label(
+                oscope_info_box,
+                3, 48, 58, 12,
+                OSCOPE_AVG_COLOR,
+                "AVG:OFF"
+            );
+    }
+
+
+    /* --------------------------------------------------------
+     * VDD (supply voltage measured with VREFINT)
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_vdd_label == NULL
+    )
+    {
+        oscope_vdd_label =
+            create_info_label(
+                oscope_info_box,
+                63, 48, 61, 12,
+                OSCOPE_VDD_COLOR,
+                "VDD:3.30V"
+            );
+    }
 }
 
 
@@ -2062,7 +2286,7 @@ static void update_info_box(void)
             (uint32_t)
             trigger_level
             *
-            3300U
+            OscopeADC_GetVdda_mV()
         )
         /
         4095U;
@@ -2209,6 +2433,23 @@ static void update_info_box(void)
     )
     {
         if (
+            auto_active
+        )
+        {
+            lv_label_set_text(
+                oscope_status_label,
+                "AUTO"
+            );
+
+
+            lv_obj_set_style_text_color(
+                oscope_status_label,
+                lv_color_hex(0xFFAA44),
+                LV_PART_MAIN |
+                LV_STATE_DEFAULT
+            );
+        }
+        else if (
             oscope_running &&
             data_waiting
         )
@@ -2373,6 +2614,92 @@ static void update_info_box(void)
             text
         );
     }
+
+
+    /* --------------------------------------------------------
+     * AVG
+     *
+     * "*" = the average is still collecting acquisitions.
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_avg_label != NULL
+    )
+    {
+        uint32_t avg_target_n;
+
+
+        avg_target_n =
+            avg_count_table[
+                avg_level_index
+            ];
+
+
+        if (
+            avg_target_n <= 1U
+        )
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "AVG:OFF"
+            );
+        }
+        else
+        {
+            snprintf(
+                text,
+                sizeof(text),
+                "AVG:%lu%s",
+                (unsigned long)avg_target_n,
+                (avg_n < avg_target_n)
+                    ? "*"
+                    : ""
+            );
+        }
+
+
+        lv_label_set_text(
+            oscope_avg_label,
+            text
+        );
+    }
+
+
+    /* --------------------------------------------------------
+     * VDD
+     *
+     * "?" = VREFINT measurement not available, nominal 3.30 V.
+     * -------------------------------------------------------- */
+
+    if (
+        oscope_vdd_label != NULL
+    )
+    {
+        uint32_t vdd_mv;
+
+
+        vdd_mv =
+            OscopeADC_GetVdda_mV();
+
+
+        snprintf(
+            text,
+            sizeof(text),
+            "VDD:%lu.%02luV%s",
+            (unsigned long)(vdd_mv / 1000U),
+            (unsigned long)((vdd_mv % 1000U) / 10U),
+            OscopeADC_IsVddaMeasured()
+                ? ""
+                : "?"
+        );
+
+
+        lv_label_set_text(
+            oscope_vdd_label,
+            text
+        );
+    }
 }
 
 
@@ -2453,6 +2780,20 @@ static void configure_sweep_timing(void)
 
 /* ============================================================
  * PREPARE NEW SWEEP
+ *
+ * Three ways to turn the 8192-sample block into 299 points:
+ *
+ *   1. AVG off, window has >= 299 samples
+ *        min/max envelope per pixel (shows noise and glitches)
+ *   2. window has >= 299 samples, AVG on
+ *        MEAN of the samples of each pixel. Averaging N samples
+ *        lowers the noise by sqrt(N) (oversampling).
+ *   3. window has < 299 samples
+ *        cubic interpolation at fractional positions.
+ *
+ * AVG on adds a second step: the trigger-aligned waveforms of
+ * consecutive acquisitions are averaged (running average over
+ * N acquisitions). Noise falls by sqrt(N) for repetitive signals.
  * ============================================================ */
 
 static bool prepare_new_sweep(void)
@@ -2471,9 +2812,17 @@ static bool prepare_new_sweep(void)
 
     uint32_t freq_hz;
 
+    uint32_t seq;
+
+    uint32_t avg_target;
+
     bool freq_approx;
 
     bool triggered;
+
+    bool use_avg;
+
+    bool new_block;
 
     float trigger_pos;
 
@@ -2486,9 +2835,10 @@ static bool prepare_new_sweep(void)
      * Get newest safe DMA block.
      */
     if (
-        !OscopeADC_GetLatestBlock(
+        !OscopeADC_GetLatestBlockSeq(
             latest_block,
-            OSCOPE_ADC_BLOCK_SIZE
+            OSCOPE_ADC_BLOCK_SIZE,
+            &seq
         )
     )
     {
@@ -2644,8 +2994,18 @@ static bool prepare_new_sweep(void)
         0U;
 
 
+    avg_target =
+        avg_count_table[
+            avg_level_index
+        ];
+
+
+    use_avg =
+        (avg_target > 1U);
+
+
     /* ========================================================
-     * MORE ADC SAMPLES THAN SCREEN POINTS
+     * MORE ADC SAMPLES THAN SCREEN POINTS, AVG OFF
      *
      * Min/Max Envelope
      * (jitter is below one pixel here, so the integer start
@@ -2655,6 +3015,8 @@ static bool prepare_new_sweep(void)
     if (
         view_sample_count >=
         OSCOPE_POINTS
+        &&
+        !use_avg
     )
     {
         start_index =
@@ -2812,46 +3174,289 @@ static bool prepare_new_sweep(void)
 
 
     /* ========================================================
-     * FEWER ADC SAMPLES THAN SCREEN POINTS
-     *
-     * Cubic interpolation at fractional positions.
-     * The fractional trigger position is kept, so the
-     * waveform does not jitter from sweep to sweep.
+     * ONE LINE (float, ADC counts) per screen point
      * ======================================================== */
 
     else
     {
+        const float *out;
+
+
+        /* ----------------------------------------------------
+         * >= 299 samples, AVG on: mean of every pixel's samples.
+         * The pixel edges are fractional, so they follow the
+         * sub-sample trigger position.
+         * ---------------------------------------------------- */
+
+        if (
+            view_sample_count >=
+            OSCOPE_POINTS
+        )
+        {
+            float span;
+
+
+            span =
+                (float)view_sample_count
+                /
+                (float)OSCOPE_POINTS;
+
+
+            for (
+                point = 0U;
+                point < OSCOPE_POINTS;
+                point++
+            )
+            {
+                float p0;
+                float p1;
+
+                uint32_t i0;
+                uint32_t i1;
+
+                uint32_t sum;
+
+
+                p0 =
+                    start_pos
+                    +
+                    span *
+                    (float)point;
+
+
+                p1 =
+                    p0
+                    +
+                    span;
+
+
+                /*
+                 * ceil() for positive values.
+                 */
+                i0 =
+                    (uint32_t)p0;
+
+                if (
+                    (float)i0 < p0
+                )
+                {
+                    i0++;
+                }
+
+
+                i1 =
+                    (uint32_t)p1;
+
+                if (
+                    (float)i1 < p1
+                )
+                {
+                    i1++;
+                }
+
+
+                if (
+                    i1 >
+                    OSCOPE_ADC_BLOCK_SIZE
+                )
+                {
+                    i1 =
+                        OSCOPE_ADC_BLOCK_SIZE;
+                }
+
+
+                if (
+                    i0 >= i1
+                )
+                {
+                    i0 =
+                        i1 - 1U;
+                }
+
+
+                sum =
+                    0U;
+
+
+                for (
+                    i = i0;
+                    i < i1;
+                    i++
+                )
+                {
+                    sum +=
+                        latest_block[i];
+                }
+
+
+                cur_values[point] =
+                    (float)sum
+                    /
+                    (float)(i1 - i0);
+            }
+        }
+
+
+        /* ----------------------------------------------------
+         * < 299 samples: cubic interpolation at fractional
+         * positions. The fractional trigger position is kept,
+         * so the waveform does not jitter from sweep to sweep.
+         * ---------------------------------------------------- */
+
+        else
+        {
+            for (
+                point = 0U;
+                point < OSCOPE_POINTS;
+                point++
+            )
+            {
+                float pos;
+
+
+                pos =
+                    start_pos
+                    +
+                    (
+                        (float)point
+                        *
+                        (float)(view_sample_count - 1U)
+                    )
+                    /
+                    (float)(OSCOPE_POINTS - 1U);
+
+
+                cur_values[point] =
+                    interpolate_cubic(
+                        latest_block,
+                        OSCOPE_ADC_BLOCK_SIZE,
+                        pos
+                    );
+            }
+        }
+
+
+        /* ----------------------------------------------------
+         * Average over acquisitions (running average).
+         *
+         * Only triggered, new acquisitions are used:
+         *  - the same block again would add no information,
+         *  - an untriggered block is not aligned to the others.
+         * An untriggered sweep is shown as it is, without
+         * touching the average.
+         * ---------------------------------------------------- */
+
+        new_block =
+            (
+                seq != avg_last_seq
+            )
+            ||
+            (
+                avg_n == 0U
+            );
+
+
+        if (
+            use_avg &&
+            triggered
+        )
+        {
+            if (
+                new_block
+            )
+            {
+                if (
+                    avg_n == 0U
+                )
+                {
+                    avg_n =
+                        1U;
+
+
+                    for (
+                        point = 0U;
+                        point < OSCOPE_POINTS;
+                        point++
+                    )
+                    {
+                        avg_acc[point] =
+                            cur_values[point];
+                    }
+                }
+                else
+                {
+                    float weight;
+
+
+                    if (
+                        avg_n < avg_target
+                    )
+                    {
+                        avg_n++;
+                    }
+                    else
+                    {
+                        avg_n =
+                            avg_target;
+                    }
+
+
+                    weight =
+                        1.0f
+                        /
+                        (float)avg_n;
+
+
+                    for (
+                        point = 0U;
+                        point < OSCOPE_POINTS;
+                        point++
+                    )
+                    {
+                        avg_acc[point] +=
+                            (
+                                cur_values[point]
+                                -
+                                avg_acc[point]
+                            )
+                            *
+                            weight;
+                    }
+                }
+
+
+                avg_last_seq =
+                    seq;
+            }
+
+
+            out =
+                avg_acc;
+        }
+        else
+        {
+            out =
+                cur_values;
+        }
+
+
+        /* ----------------------------------------------------
+         * To chart units (Volt/Div scaling) and statistics.
+         * ---------------------------------------------------- */
+
         for (
             point = 0U;
             point < OSCOPE_POINTS;
             point++
         )
         {
-            float pos;
-
             float value_f;
 
             uint16_t value;
 
 
-            pos =
-                start_pos
-                +
-                (
-                    (float)point
-                    *
-                    (float)(view_sample_count - 1U)
-                )
-                /
-                (float)(OSCOPE_POINTS - 1U);
-
-
             value_f =
-                interpolate_cubic(
-                    latest_block,
-                    OSCOPE_ADC_BLOCK_SIZE,
-                    pos
-                );
+                out[point];
 
 
             if (
@@ -2877,15 +3482,13 @@ static bool prepare_new_sweep(void)
 
 
             sweep_min_values[point] =
-                scale_adc_for_display(
-                    value
+                scale_adc_f_for_display(
+                    value_f
                 );
 
 
             sweep_max_values[point] =
-                scale_adc_for_display(
-                    value
-                );
+                sweep_min_values[point];
 
 
             if (
@@ -2938,7 +3541,7 @@ static bool prepare_new_sweep(void)
 
 
     /*
-     * Update info (frequency, Vpp, Vrms ...).
+     * Update info (frequency, Vpp, Vrms, AVG ...).
      */
     update_info_box();
 
@@ -3008,6 +3611,502 @@ static void apply_time_div_rate(void)
 
         clear_chart();
     }
+}
+
+
+/* ============================================================
+ * AUTO SETUP
+ *
+ * Like the AUTOSET key of a bench oscilloscope:
+ *   1. Acquire blocks at 700 kS/s, 80 kS/s, 8 kS/s, 4 kS/s
+ *      (fast -> slow) until the frequency can be measured.
+ *   2. Time/Div  -> about AUTO_TARGET_PERIODS periods on screen.
+ *   3. Volt/Div  -> smallest scale that keeps the whole signal
+ *                   on screen.
+ *   4. Trigger   -> middle of the signal (min + max) / 2.
+ *   5. Sample rate of the new Time/Div is applied and the
+ *      normal sweep restarts.
+ * It runs inside the display timer, so the GUI stays responsive.
+ * ============================================================ */
+
+static void reset_sweep(void);
+
+
+static void auto_apply(
+    bool have_freq,
+    uint32_t freq_hz,
+    uint16_t vmin,
+    uint16_t vmax
+)
+{
+    uint32_t i;
+    uint32_t vdda;
+    uint32_t pp;
+    uint32_t min_mv;
+    uint32_t max_mv;
+    uint32_t pp_mv;
+
+
+    vdda =
+        OscopeADC_GetVdda_mV();
+
+    pp =
+        (uint32_t)vmax - (uint32_t)vmin;
+
+    min_mv =
+        ((uint32_t)vmin * vdda) / 4095U;
+
+    max_mv =
+        ((uint32_t)vmax * vdda) / 4095U;
+
+
+    /*
+     * Screen center = middle of the signal, so the waveform
+     * is centered whatever its DC offset is.
+     */
+    pp_mv =
+        max_mv - min_mv;
+
+    center_mv =
+        (min_mv + max_mv) / 2U;
+
+
+    /*
+     * Volt/Div: smallest value where the signal is at most
+     * 6 divisions high (of 8).
+     */
+    for (
+        i = 0U;
+        i < (VOLT_DIV_COUNT - 1U);
+        i++
+    )
+    {
+        uint32_t vdiv_mv;
+
+
+        vdiv_mv =
+            (uint32_t)(
+                volt_div_table[i] * 1000.0f
+                + 0.5f
+            );
+
+
+        if (
+            pp_mv * 10U <=
+            vdiv_mv * AUTO_PP_TENTHS_DIV
+        )
+        {
+            break;
+        }
+    }
+
+
+    volt_div_index =
+        i;
+
+
+    /*
+     * Trigger in the middle of the signal.
+     * Only when there is a real signal (not DC / noise).
+     */
+    if (
+        pp >= FREQ_MIN_PP_COUNTS
+    )
+    {
+        uint32_t mid;
+
+
+        mid =
+            ((uint32_t)vmin + (uint32_t)vmax) / 2U;
+
+
+        if (
+            mid < TRIGGER_MIN
+        )
+        {
+            mid =
+                TRIGGER_MIN;
+        }
+
+
+        if (
+            mid > TRIGGER_MAX
+        )
+        {
+            mid =
+                TRIGGER_MAX;
+        }
+
+
+        trigger_level =
+            (uint16_t)mid;
+    }
+
+
+    /*
+     * Time/Div: closest table entry to
+     * AUTO_TARGET_PERIODS periods in 10 divisions.
+     * target_us = periods / f / 10 = 3e5 / f  (for 3 periods)
+     */
+    if (
+        have_freq &&
+        freq_hz > 0U
+    )
+    {
+        float target_us;
+        float best_ratio;
+        uint32_t best_index;
+
+
+        target_us =
+            ((float)AUTO_TARGET_PERIODS * 100000.0f)
+            /
+            (float)freq_hz;
+
+
+        best_index =
+            0U;
+
+        best_ratio =
+            1.0e30f;
+
+
+        for (
+            i = 0U;
+            i < TIME_DIV_COUNT;
+            i++
+        )
+        {
+            float r;
+
+
+            r =
+                (float)time_div_table[i].time_div_us
+                /
+                target_us;
+
+
+            if (
+                r < 1.0f
+            )
+            {
+                r =
+                    1.0f / r;
+            }
+
+
+            if (
+                r < best_ratio
+            )
+            {
+                best_ratio =
+                    r;
+
+                best_index =
+                    i;
+            }
+        }
+
+
+        time_div_index =
+            best_index;
+    }
+
+
+    /*
+     * Fastest sweep (whole waveform drawn in one frame).
+     */
+    sweep_speed_index =
+        SWEEP_SPEED_COUNT - 1U;
+
+
+    /*
+     * Done: leave auto mode, apply the sample rate of the
+     * chosen Time/Div, restart the sweep.
+     */
+    auto_active =
+        false;
+
+
+    apply_time_div_rate();
+
+
+    reset_sweep();
+
+
+    update_trigger_line();
+}
+
+
+/*
+ * Give up (no data): restore the normal state.
+ */
+static void auto_abort(void)
+{
+    auto_active =
+        false;
+
+
+    apply_time_div_rate();
+
+
+    reset_sweep();
+}
+
+
+static void auto_step(void)
+{
+    uint32_t i;
+    uint32_t seq;
+    uint32_t freq_hz;
+    uint32_t limit_frames;
+    uint32_t rate;
+
+    uint16_t vmin;
+    uint16_t vmax;
+
+    bool approx;
+    bool got_freq;
+    bool last_stage;
+    bool next_stage;
+
+
+    rate =
+        auto_rate_table[auto_rate_idx];
+
+    last_stage =
+        ((auto_rate_idx + 1U) >= AUTO_RATE_COUNT);
+
+    next_stage =
+        false;
+
+    auto_wait_frames++;
+
+
+    /*
+     * A block takes 8192 / rate seconds. Wait up to twice that.
+     */
+    limit_frames =
+        (
+            (2U * OSCOPE_ADC_BLOCK_SIZE * 1000U) / rate
+        )
+        /
+        OSCOPE_DISPLAY_PERIOD_MS
+        + 20U;
+
+
+    if (
+        OscopeADC_GetLatestBlockSeq(
+            latest_block,
+            OSCOPE_ADC_BLOCK_SIZE,
+            &seq
+        )
+    )
+    {
+        vmin =
+            latest_block[0];
+
+        vmax =
+            latest_block[0];
+
+
+        for (
+            i = 1U;
+            i < OSCOPE_ADC_BLOCK_SIZE;
+            i++
+        )
+        {
+            if (
+                latest_block[i] < vmin
+            )
+            {
+                vmin =
+                    latest_block[i];
+            }
+
+
+            if (
+                latest_block[i] > vmax
+            )
+            {
+                vmax =
+                    latest_block[i];
+            }
+        }
+
+
+        approx =
+            false;
+
+        freq_hz =
+            0U;
+
+
+        got_freq =
+            measure_frequency(
+                latest_block,
+                OSCOPE_ADC_BLOCK_SIZE,
+                &freq_hz,
+                &approx
+            );
+
+
+        if (
+            got_freq
+        )
+        {
+            auto_apply(
+                true,
+                freq_hz,
+                vmin,
+                vmax
+            );
+
+            return;
+        }
+
+
+        if (
+            last_stage
+        )
+        {
+            /*
+             * No frequency (DC or very slow signal):
+             * only Volt/Div and trigger are adjusted.
+             */
+            auto_apply(
+                false,
+                0U,
+                vmin,
+                vmax
+            );
+
+            return;
+        }
+
+
+        next_stage =
+            true;
+    }
+    else if (
+        auto_wait_frames > limit_frames
+    )
+    {
+        if (
+            last_stage
+        )
+        {
+            auto_abort();
+
+            return;
+        }
+
+
+        next_stage =
+            true;
+    }
+
+
+    if (
+        next_stage
+    )
+    {
+        auto_rate_idx++;
+
+        auto_wait_frames =
+            0U;
+
+        applied_rate_hz =
+            auto_rate_table[auto_rate_idx];
+
+
+        if (
+            OscopeADC_SetSampleRate(
+                applied_rate_hz
+            ) != HAL_OK
+        )
+        {
+            oscope_running =
+                false;
+
+            auto_active =
+                false;
+
+            update_info_box();
+        }
+    }
+}
+
+
+void OscopePage_Auto(void)
+{
+    if (
+        !oscope_active
+    )
+    {
+        return;
+    }
+
+
+    sweep_active =
+        false;
+
+    sweep_drawn_points =
+        0U;
+
+    data_waiting =
+        false;
+
+    auto_rate_idx =
+        0U;
+
+    auto_wait_frames =
+        0U;
+
+
+    /*
+     * Start with the fastest rate (also starts the ADC
+     * when the scope was stopped).
+     */
+    applied_rate_hz =
+        auto_rate_table[0];
+
+
+    if (
+        OscopeADC_SetSampleRate(
+            applied_rate_hz
+        ) != HAL_OK
+    )
+    {
+        return;
+    }
+
+
+    if (
+        !oscope_running
+    )
+    {
+        if (
+            OscopeADC_Start() != HAL_OK
+        )
+        {
+            return;
+        }
+
+
+        oscope_running =
+            true;
+    }
+
+
+    auto_active =
+        true;
+
+
+    clear_chart();
+
+
+    update_info_box();
 }
 
 
@@ -3129,6 +4228,19 @@ static void oscilloscope_display_timer_cb(
 
 
     /*
+     * Auto setup in progress: no normal sweep.
+     */
+    if (
+        auto_active
+    )
+    {
+        auto_step();
+
+        return;
+    }
+
+
+    /*
      * Start a fresh waveform when
      * the previous sweep is finished.
      */
@@ -3158,6 +4270,29 @@ static void oscilloscope_display_timer_cb(
 
 static void reset_sweep(void)
 {
+    /*
+     * Any setting change restarts the average:
+     * old acquisitions no longer match the new settings.
+     */
+    avg_n =
+        0U;
+
+
+    /*
+     * A manual change cancels a running auto setup and
+     * restores the sample rate of the current Time/Div.
+     */
+    if (
+        auto_active
+    )
+    {
+        auto_active =
+            false;
+
+        apply_time_div_rate();
+    }
+
+
     sweep_active =
         false;
 
@@ -3276,6 +4411,13 @@ void OscopePage_OnEnter(void)
 
 
     /*
+     * VDDA was measured when the ADC started:
+     * the trigger line depends on it.
+     */
+    update_trigger_line();
+
+
+    /*
      * Create dedicated 60 FPS timer.
      */
     if (
@@ -3316,6 +4458,10 @@ void OscopePage_OnEnter(void)
 void OscopePage_OnExit(void)
 {
     oscope_active =
+        false;
+
+
+    auto_active =
         false;
 
 
@@ -3556,6 +4702,10 @@ void OscopePage_ToggleRunStop(void)
             false;
 
 
+        auto_active =
+            false;
+
+
         sweep_active =
             false;
     }
@@ -3582,6 +4732,9 @@ void OscopePage_ToggleRunStop(void)
 
             data_waiting =
                 true;
+
+
+            update_trigger_line();
 
 
             reset_sweep();
@@ -3637,6 +4790,47 @@ void OscopePage_SweepDecrease(void)
     /*
      * Start immediately with new speed.
      */
+    reset_sweep();
+}
+
+
+/* ============================================================
+ * AVG +
+ *
+ * More acquisitions in the average (less noise, slower response)
+ * OFF -> 4 -> 16 -> 64
+ * ============================================================ */
+
+void OscopePage_AvgIncrease(void)
+{
+    if (
+        avg_level_index + 1U <
+        AVG_LEVEL_COUNT
+    )
+    {
+        avg_level_index++;
+    }
+
+
+    reset_sweep();
+}
+
+
+/* ============================================================
+ * AVG -
+ * ============================================================ */
+
+void OscopePage_AvgDecrease(void)
+{
+    if (
+        avg_level_index >
+        0U
+    )
+    {
+        avg_level_index--;
+    }
+
+
     reset_sweep();
 }
 

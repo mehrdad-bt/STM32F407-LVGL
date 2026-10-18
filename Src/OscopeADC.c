@@ -14,6 +14,55 @@ extern TIM_HandleTypeDef htim2;
 
 
 /* ============================================================
+ * SIGNAL CHANNEL
+ *
+ * Must be the same as the channel configured in MX_ADC1_Init().
+ * It is restored after each VREFINT measurement.
+ * ============================================================ */
+
+#define OSCOPE_SIGNAL_CHANNEL          ADC_CHANNEL_12
+
+#define OSCOPE_SIGNAL_SAMPLETIME       ADC_SAMPLETIME_15CYCLES
+
+
+/* ============================================================
+ * VREFINT (internal reference, about 1.21 V)
+ * ============================================================ */
+
+/*
+ * Factory calibration: raw ADC value of VREFINT measured with
+ * VDDA = 3.3 V at 30 degrees C (STM32F405/407/415/417 and
+ * the other F4 devices that provide it).
+ */
+#ifndef OSCOPE_VREFINT_CAL_PTR
+#define OSCOPE_VREFINT_CAL_PTR \
+    ((const volatile uint16_t *)0x1FFF7A2AU)
+#endif
+
+#define OSCOPE_VREFINT_CAL_VDDA_MV     3300U
+
+/*
+ * Plausible range of the calibration word.
+ * 1.21 V / 3.3 V x 4095 = about 1500.
+ * An erased (0xFFFF) or zero word is rejected.
+ */
+#define OSCOPE_VREFINT_CAL_MIN         1200U
+#define OSCOPE_VREFINT_CAL_MAX         1800U
+
+/*
+ * VREFINT needs at least 10 us sampling time:
+ * 480 cycles / 21 MHz = 22.9 us.
+ */
+#define OSCOPE_VREFINT_SAMPLES         32U
+
+/*
+ * Plausible supply range, anything else is rejected.
+ */
+#define OSCOPE_VDDA_MIN_MV             2400U
+#define OSCOPE_VDDA_MAX_MV             3600U
+
+
+/* ============================================================
  * DMA STORAGE
  * ============================================================ */
 
@@ -48,10 +97,23 @@ static volatile bool latest_block_valid = false;
 static volatile uint32_t latest_half_index = 0U;
 
 /*
+ * Number of completed blocks (only increases).
+ */
+static volatile uint32_t block_sequence = 0U;
+
+/*
  * Current (actual) sample rate.
  */
 static uint32_t sample_rate_hz =
     OSCOPE_ADC_DEFAULT_SAMPLE_RATE_HZ;
+
+/*
+ * Reference voltage.
+ */
+static uint32_t vdda_mv =
+    OSCOPE_ADC_VDDA_NOMINAL_MV;
+
+static bool vdda_measured = false;
 
 
 /* ============================================================
@@ -82,6 +144,212 @@ static uint32_t get_timer_clock_hz(void)
 
 
     return clk;
+}
+
+
+/* ============================================================
+ * MEASURE VDDA WITH VREFINT
+ *
+ * VREFINT is a fixed 1.21 V inside the chip.
+ * The factory stored the ADC reading it gave at VDDA = 3.3 V.
+ * The same voltage read at the present VDDA gives
+ *
+ *   VDDA = 3.3 V x VREFINT_CAL / VREFINT_DATA
+ *
+ * Must only be called while the ADC/DMA/timer are stopped.
+ * The signal channel is restored at the end.
+ * ============================================================ */
+
+static void measure_vdda(void)
+{
+    ADC_ChannelConfTypeDef channel_config = {0};
+
+    uint32_t cal;
+    uint32_t sum;
+    uint32_t count;
+    uint32_t i;
+    uint32_t raw;
+    uint32_t result;
+
+
+    cal =
+        (uint32_t)(*OSCOPE_VREFINT_CAL_PTR);
+
+
+    if (
+        cal < OSCOPE_VREFINT_CAL_MIN ||
+        cal > OSCOPE_VREFINT_CAL_MAX
+    )
+    {
+        /*
+         * No usable calibration value in this chip.
+         * Keep the nominal 3.3 V.
+         */
+        return;
+    }
+
+
+    sum =
+        0U;
+
+    count =
+        0U;
+
+
+    /*
+     * Select VREFINT with a long sampling time.
+     * HAL also switches on the VREFINT path (ADC_CCR_TSVREFE).
+     */
+    channel_config.Channel =
+        ADC_CHANNEL_VREFINT;
+
+    channel_config.Rank =
+        1U;
+
+    channel_config.SamplingTime =
+        ADC_SAMPLETIME_480CYCLES;
+
+
+    if (
+        HAL_ADC_ConfigChannel(
+            &hadc1,
+            &channel_config
+        ) == HAL_OK
+    )
+    {
+        /*
+         * Software start: remove the TIM2 trigger for now.
+         */
+        hadc1.Instance->CR2 &=
+            ~ADC_CR2_EXTEN;
+
+
+        for (
+            i = 0U;
+            i < OSCOPE_VREFINT_SAMPLES;
+            i++
+        )
+        {
+            if (
+                HAL_ADC_Start(
+                    &hadc1
+                ) != HAL_OK
+            )
+            {
+                break;
+            }
+
+
+            if (
+                HAL_ADC_PollForConversion(
+                    &hadc1,
+                    5U
+                ) == HAL_OK
+            )
+            {
+                sum +=
+                    HAL_ADC_GetValue(
+                        &hadc1
+                    );
+
+                count++;
+            }
+
+
+            HAL_ADC_Stop(
+                &hadc1
+            );
+        }
+    }
+
+
+    /*
+     * Switch the VREFINT path off and restore the signal channel
+     * and the TIM2 trigger edge.
+     */
+    ADC->CCR &=
+        ~ADC_CCR_TSVREFE;
+
+
+    channel_config.Channel =
+        OSCOPE_SIGNAL_CHANNEL;
+
+    channel_config.Rank =
+        1U;
+
+    channel_config.SamplingTime =
+        OSCOPE_SIGNAL_SAMPLETIME;
+
+
+    HAL_ADC_ConfigChannel(
+        &hadc1,
+        &channel_config
+    );
+
+
+    hadc1.Instance->CR2 =
+        (
+            hadc1.Instance->CR2 &
+            ~ADC_CR2_EXTEN
+        )
+        |
+        hadc1.Init.ExternalTrigConvEdge;
+
+
+    /*
+     * Result.
+     * At least half of the conversions must have worked.
+     */
+    if (
+        count <
+        (OSCOPE_VREFINT_SAMPLES / 2U)
+    )
+    {
+        return;
+    }
+
+
+    raw =
+        (sum + (count / 2U)) /
+        count;
+
+
+    if (
+        raw == 0U
+    )
+    {
+        return;
+    }
+
+
+    result =
+        (uint32_t)(
+            (
+                (uint64_t)OSCOPE_VREFINT_CAL_VDDA_MV *
+                (uint64_t)cal
+                +
+                (uint64_t)(raw / 2U)
+            )
+            /
+            (uint64_t)raw
+        );
+
+
+    if (
+        result < OSCOPE_VDDA_MIN_MV ||
+        result > OSCOPE_VDDA_MAX_MV
+    )
+    {
+        return;
+    }
+
+
+    vdda_mv =
+        result;
+
+
+    vdda_measured =
+        true;
 }
 
 
@@ -119,6 +387,13 @@ HAL_StatusTypeDef OscopeADC_Start(void)
         0,
         sizeof(adc_dma_buffer)
     );
+
+
+    /*
+     * Measure the supply voltage while everything is stopped.
+     * Takes about 1 ms.
+     */
+    measure_vdda();
 
 
     /*
@@ -350,13 +625,15 @@ HAL_StatusTypeDef OscopeADC_SetSampleRate(
  * GET LATEST BLOCK
  * ============================================================ */
 
-bool OscopeADC_GetLatestBlock(
+bool OscopeADC_GetLatestBlockSeq(
     uint16_t *destination,
-    uint32_t destination_size
+    uint32_t destination_size,
+    uint32_t *sequence
 )
 {
     bool valid;
     uint32_t half_index;
+    uint32_t seq;
     const uint16_t *source;
 
 
@@ -395,6 +672,10 @@ bool OscopeADC_GetLatestBlock(
         latest_half_index;
 
 
+    seq =
+        block_sequence;
+
+
     if (
         half_index == 0U
     )
@@ -424,7 +705,31 @@ bool OscopeADC_GetLatestBlock(
     __enable_irq();
 
 
+    if (
+        valid &&
+        sequence != NULL
+    )
+    {
+        *sequence =
+            seq;
+    }
+
+
     return valid;
+}
+
+
+bool OscopeADC_GetLatestBlock(
+    uint16_t *destination,
+    uint32_t destination_size
+)
+{
+    return
+        OscopeADC_GetLatestBlockSeq(
+            destination,
+            destination_size,
+            NULL
+        );
 }
 
 
@@ -435,6 +740,22 @@ bool OscopeADC_GetLatestBlock(
 uint32_t OscopeADC_GetSampleRate(void)
 {
     return sample_rate_hz;
+}
+
+
+/* ============================================================
+ * VDDA
+ * ============================================================ */
+
+uint32_t OscopeADC_GetVdda_mV(void)
+{
+    return vdda_mv;
+}
+
+
+bool OscopeADC_IsVddaMeasured(void)
+{
+    return vdda_measured;
 }
 
 
@@ -478,6 +799,9 @@ void HAL_ADC_ConvHalfCpltCallback(
         0U;
 
 
+    block_sequence++;
+
+
     latest_block_valid =
         true;
 }
@@ -517,6 +841,9 @@ void HAL_ADC_ConvCpltCallback(
      */
     latest_half_index =
         1U;
+
+
+    block_sequence++;
 
 
     latest_block_valid =
