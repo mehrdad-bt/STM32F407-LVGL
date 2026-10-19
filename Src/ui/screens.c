@@ -18,12 +18,6 @@ objects_t objects;
 
 lv_obj_t *tick_value_change_obj;
 
-static void event_handler_checked_cb_main_msg_hide_switch(lv_event_t *e) {
-    if (lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED)) {
-        action_error_hide(e);
-    }
-}
-
 //
 // Screens
 //
@@ -100,48 +94,12 @@ void create_screen_main() {
             }
         }
         {
-            // messageBox
-            lv_obj_t *obj = lv_msgbox_create(parent_obj, "", "", 0, false);
-            objects.message_box = obj;
-            lv_obj_set_pos(obj, 41, 53);
-            lv_obj_set_size(obj, 238, 144);
-            lv_obj_set_style_align(obj, LV_ALIGN_DEFAULT, LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    // message_box_text
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.message_box_text = obj;
-                    lv_obj_set_pos(obj, 180, 18);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_label_set_text_static(obj, "Text");
-                }
-            }
-        }
-        {
             // information_indicator
             lv_obj_t *obj = lv_label_create(parent_obj);
             objects.information_indicator = obj;
             lv_obj_set_pos(obj, 40, 3);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_obj_set_style_text_color(obj, lv_color_hex(0xc3c3c3), LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_label_set_text_static(obj, "Text");
-        }
-        {
-            // msg_hide_switch
-            lv_obj_t *obj = lv_switch_create(parent_obj);
-            objects.msg_hide_switch = obj;
-            lv_obj_set_pos(obj, 260, 201);
-            lv_obj_set_size(obj, 50, 25);
-            lv_obj_add_event_cb(obj, event_handler_checked_cb_main_msg_hide_switch, LV_EVENT_VALUE_CHANGED, (void *)0);
-            lv_obj_add_event_cb(obj, event_handler_cb_main_msg_hide_switch, LV_EVENT_ALL, 0);
-        }
-        {
-            // Error_hide_text
-            lv_obj_t *obj = lv_label_create(parent_obj);
-            objects.error_hide_text = obj;
-            lv_obj_set_pos(obj, 192, 210);
-            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_label_set_text_static(obj, "Text");
         }
     }
@@ -254,8 +212,8 @@ void create_screen_osilloscop() {
             // oscope_page_exit_button
             lv_obj_t *obj = lv_btn_create(parent_obj);
             objects.oscope_page_exit_button = obj;
-            lv_obj_set_pos(obj, 276, 209);
-            lv_obj_set_size(obj, 34, 28);
+            lv_obj_set_pos(obj, 276, 177);
+            lv_obj_set_size(obj, 34, 60);
             lv_obj_add_event_cb(obj, action_exit_from_oscope_page, LV_EVENT_RELEASED, (void *)0);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0x00ffc9), LV_PART_MAIN | LV_STATE_DEFAULT);
             {
@@ -273,179 +231,24 @@ void create_screen_osilloscop() {
             }
         }
         {
-            // time_plus_btn
-            lv_obj_t *obj = lv_btn_create(parent_obj);
-            objects.time_plus_btn = obj;
-            lv_obj_set_pos(obj, 4, 176);
-            lv_obj_set_size(obj, 48, 25);
-            lv_obj_add_event_cb(obj, action_time_increase, LV_EVENT_PRESSED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "TIME +");
-                }
-            }
-        }
-        {
-            // time_minus_btn
-            lv_obj_t *obj = lv_btn_create(parent_obj);
-            objects.time_minus_btn = obj;
-            lv_obj_set_pos(obj, 4, 211);
-            lv_obj_set_size(obj, 48, 25);
-            lv_obj_add_event_cb(obj, action_time_decrease, LV_EVENT_PRESSED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 1, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "TIME -");
-                }
-            }
-        }
-        {
-            // volt_plus_btn
-            lv_obj_t *obj = lv_btn_create(parent_obj);
-            objects.volt_plus_btn = obj;
-            lv_obj_set_pos(obj, 58, 176);
-            lv_obj_set_size(obj, 48, 25);
-            lv_obj_add_event_cb(obj, action_volt_increase, LV_EVENT_PRESSED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "VOLT +");
-                }
-            }
-        }
-        {
-            // volt_minus_btn
-            lv_obj_t *obj = lv_btn_create(parent_obj);
-            objects.volt_minus_btn = obj;
-            lv_obj_set_pos(obj, 58, 211);
-            lv_obj_set_size(obj, 48, 25);
-            lv_obj_add_event_cb(obj, action_volt_decrease, LV_EVENT_PRESSED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "VOLT -");
-                }
-            }
-        }
-        {
-            // trig_plus_btn
-            lv_obj_t *obj = lv_btn_create(parent_obj);
-            objects.trig_plus_btn = obj;
-            lv_obj_set_pos(obj, 111, 176);
-            lv_obj_set_size(obj, 48, 25);
-            lv_obj_add_event_cb(obj, action_trig_increase, LV_EVENT_PRESSED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 1, 1);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "TRIG +");
-                }
-            }
-        }
-        {
-            // trig_minus_btn
-            lv_obj_t *obj = lv_btn_create(parent_obj);
-            objects.trig_minus_btn = obj;
-            lv_obj_set_pos(obj, 111, 211);
-            lv_obj_set_size(obj, 48, 25);
-            lv_obj_add_event_cb(obj, action_trig_decrease, LV_EVENT_PRESSED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "TRIG -");
-                }
-            }
-        }
-        {
             // stop_run_btn
             lv_obj_t *obj = lv_btn_create(parent_obj);
             objects.stop_run_btn = obj;
-            lv_obj_set_pos(obj, 226, 177);
-            lv_obj_set_size(obj, 40, 25);
+            lv_obj_set_pos(obj, 195, 177);
+            lv_obj_set_size(obj, 70, 25);
             lv_obj_add_event_cb(obj, action_stop_run_oscope, LV_EVENT_PRESSED, (void *)0);
+            lv_obj_set_style_bg_color(obj, lv_color_hex(0x21f327), LV_PART_MAIN | LV_STATE_DEFAULT);
             {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.obj0 = obj;
                     lv_obj_set_pos(obj, 1, 1);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "S/R");
-                }
-            }
-        }
-        {
-            lv_obj_t *obj = lv_btn_create(parent_obj);
-            objects.obj0 = obj;
-            lv_obj_set_pos(obj, 165, 177);
-            lv_obj_set_size(obj, 48, 25);
-            lv_obj_add_event_cb(obj, action_sweep_increase, LV_EVENT_PRESSED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "sweep+");
-                }
-            }
-        }
-        {
-            lv_obj_t *obj = lv_btn_create(parent_obj);
-            objects.obj1 = obj;
-            lv_obj_set_pos(obj, 165, 209);
-            lv_obj_set_size(obj, 48, 25);
-            lv_obj_add_event_cb(obj, action_sweep_decrease, LV_EVENT_PRESSED, (void *)0);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
-            {
-                lv_obj_t *parent_obj = obj;
-                {
-                    lv_obj_t *obj = lv_label_create(parent_obj);
-                    lv_obj_set_pos(obj, 0, 0);
-                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_label_set_text_static(obj, "sweep-");
+                    lv_obj_set_style_text_color(obj, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text_static(obj, "STOP/RUN");
                 }
             }
         }
@@ -453,8 +256,8 @@ void create_screen_osilloscop() {
             // auto_button
             lv_obj_t *obj = lv_btn_create(parent_obj);
             objects.auto_button = obj;
-            lv_obj_set_pos(obj, 225, 209);
-            lv_obj_set_size(obj, 40, 25);
+            lv_obj_set_pos(obj, 196, 209);
+            lv_obj_set_size(obj, 69, 25);
             lv_obj_add_event_cb(obj, action_auto_button, LV_EVENT_RELEASED, (void *)0);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0xf3ed21), LV_PART_MAIN | LV_STATE_DEFAULT);
             {
@@ -470,6 +273,42 @@ void create_screen_osilloscop() {
                     lv_label_set_text_static(obj, "Auto");
                 }
             }
+        }
+        {
+            // time_text
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            objects.time_text = obj;
+            lv_obj_set_pos(obj, 11, 198);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_obj_set_style_text_color(obj, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text_static(obj, "TIM");
+        }
+        {
+            // voltage_text
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            objects.voltage_text = obj;
+            lv_obj_set_pos(obj, 47, 199);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_obj_set_style_text_color(obj, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text_static(obj, "VOLT");
+        }
+        {
+            // sweep_text
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            objects.sweep_text = obj;
+            lv_obj_set_pos(obj, 96, 199);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_obj_set_style_text_color(obj, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text_static(obj, "SWP");
+        }
+        {
+            // trig_button
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            objects.trig_button = obj;
+            lv_obj_set_pos(obj, 144, 199);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_obj_set_style_text_color(obj, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text_static(obj, "TRIG");
         }
     }
     

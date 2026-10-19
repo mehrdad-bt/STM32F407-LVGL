@@ -7,6 +7,8 @@
 
 #include "OscopeADC.h"
 
+#include "main.h"
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -4323,6 +4325,515 @@ static void reset_sweep(void)
 
 
 /* ============================================================
+ * ROTARY ENCODER + BUTTONS
+ *
+ *   ENCODER_INPUT  : encoder push button, moves the selection
+ *                    TIME -> VOLT -> SWEEP -> TRIG -> TIME ...
+ *                    (the selected item is shown in red)
+ *   TIM3 encoder   : changes the selected parameter
+ *                    clockwise = increase, counter-clockwise = decrease
+ *
+ * ENCODER_INPUT is active low (pull-up, switch to GND).
+ * The touch buttons (Exit, Auto, S/R ...) work only by touch,
+ * the physical buttons do not control them.
+ * ============================================================ */
+
+extern TIM_HandleTypeDef htim3;
+
+/*
+ * Input scan period and debounce (3 x 10 ms = 30 ms stable).
+ */
+#define OSCOPE_INPUT_PERIOD_MS         5U
+
+/*
+ * Minimum time (real milliseconds, HAL_GetTick) between two accepted
+ * button changes. The press is accepted immediately, so the response
+ * does not depend on how often LVGL runs the timer.
+ */
+#define OSCOPE_BTN_LOCKOUT_MS          25U
+
+/*
+ * Timer counts per encoder click.
+ * TI1+TI2 mode gives 4 counts per click on most encoders
+ * (use 2 if one click gives two counts).
+ */
+#define OSCOPE_ENC_COUNTS_PER_STEP     2
+
+/*
+ * 1 = swap the rotation direction.
+ */
+#define OSCOPE_ENC_REVERSE             1
+
+/*
+ * Hardware input filter of TIM3 (0..15, 15 = strongest).
+ */
+#define OSCOPE_ENC_FILTER              15U
+
+#define OSCOPE_SELECT_COLOR            0xFF0000U
+#define OSCOPE_MENU_NORMAL_COLOR       0xFFFFFFU
+
+
+typedef enum
+{
+    SEL_TIME = 0,
+    SEL_VOLT,
+    SEL_SWEEP,
+    SEL_TRIG,
+    SEL_COUNT
+
+} oscope_select_t;
+
+
+typedef struct
+{
+    bool pressed;
+
+    uint32_t last_change_ms;
+
+} oscope_button_t;
+
+
+/*
+ * SEL_COUNT = nothing selected.
+ */
+static uint32_t selected_item =
+    SEL_TIME;
+
+static lv_timer_t *oscope_input_timer =
+    NULL;
+
+static uint16_t enc_last =
+    0U;
+
+static int32_t enc_accum =
+    0;
+
+static oscope_button_t btn_next =
+{
+    false,
+    0U
+};
+
+static bool read_btn_next(void)
+{
+    return
+        (
+            HAL_GPIO_ReadPin(
+                ENCODER_INPUT_GPIO_Port,
+                ENCODER_INPUT_Pin
+            ) == GPIO_PIN_RESET
+        );
+}
+
+
+/*
+ * Returns true once for every new press.
+ *
+ * The change is accepted at once (no waiting), then further changes
+ * are ignored for OSCOPE_BTN_LOCKOUT_MS to skip contact bounce.
+ * The time comes from HAL_GetTick(), so the response stays fast
+ * even when LVGL runs the timer late (waveform drawing).
+ */
+static bool button_pressed_edge(
+    oscope_button_t *b,
+    bool raw_pressed
+)
+{
+    uint32_t now;
+
+
+    if (
+        raw_pressed == b->pressed
+    )
+    {
+        return false;
+    }
+
+
+    now =
+        HAL_GetTick();
+
+
+    if (
+        (uint32_t)(now - b->last_change_ms) <
+        OSCOPE_BTN_LOCKOUT_MS
+    )
+    {
+        return false;
+    }
+
+
+    b->last_change_ms =
+        now;
+
+    b->pressed =
+        raw_pressed;
+
+
+    return raw_pressed;
+}
+
+
+static void set_label_color(
+    lv_obj_t *label,
+    uint32_t color,
+    bool selected
+)
+{
+    if (
+        label == NULL
+    )
+    {
+        return;
+    }
+
+
+    lv_obj_set_style_text_color(
+        label,
+        lv_color_hex(
+            selected
+                ? OSCOPE_SELECT_COLOR
+                : color
+        ),
+        LV_PART_MAIN |
+        LV_STATE_DEFAULT
+    );
+}
+
+
+/*
+ * Selected item = red, all others = their normal color.
+ */
+static void update_selection_highlight(void)
+{
+    /*
+     * The four menu texts of the page (EEZ objects):
+     * TIM, VOLT, SWP, TRIG. Normal color = white (same as EEZ).
+     */
+    set_label_color(
+        objects.time_text,
+        OSCOPE_MENU_NORMAL_COLOR,
+        selected_item == SEL_TIME
+    );
+
+    set_label_color(
+        objects.voltage_text,
+        OSCOPE_MENU_NORMAL_COLOR,
+        selected_item == SEL_VOLT
+    );
+
+    set_label_color(
+        objects.sweep_text,
+        OSCOPE_MENU_NORMAL_COLOR,
+        selected_item == SEL_SWEEP
+    );
+
+    set_label_color(
+        objects.trig_button,
+        OSCOPE_MENU_NORMAL_COLOR,
+        selected_item == SEL_TRIG
+    );
+}
+
+
+/*
+ * direction > 0 : increase, direction < 0 : decrease
+ */
+static void apply_encoder_step(
+    int32_t direction
+)
+{
+#if OSCOPE_ENC_REVERSE
+    direction =
+        -direction;
+#endif
+
+
+    if (
+        selected_item == SEL_TIME
+    )
+    {
+        if (direction > 0)
+        {
+            OscopePage_TimeIncrease();
+        }
+        else
+        {
+            OscopePage_TimeDecrease();
+        }
+    }
+    else if (
+        selected_item == SEL_VOLT
+    )
+    {
+        if (direction > 0)
+        {
+            OscopePage_VoltIncrease();
+        }
+        else
+        {
+            OscopePage_VoltDecrease();
+        }
+    }
+    else if (
+        selected_item == SEL_SWEEP
+    )
+    {
+        if (direction > 0)
+        {
+            OscopePage_SweepIncrease();
+        }
+        else
+        {
+            OscopePage_SweepDecrease();
+        }
+    }
+    else if (
+        selected_item == SEL_TRIG
+    )
+    {
+        if (direction > 0)
+        {
+            OscopePage_TriggerIncrease();
+        }
+        else
+        {
+            OscopePage_TriggerDecrease();
+        }
+    }
+}
+
+
+static void oscope_input_timer_cb(
+    lv_timer_t *timer
+)
+{
+    uint16_t count;
+
+    int16_t diff;
+
+
+    (void)timer;
+
+
+    if (
+        !oscope_active
+    )
+    {
+        return;
+    }
+
+
+    /* --------------------------------------------------------
+     * Encoder push button: next item (wraps around)
+     * -------------------------------------------------------- */
+
+    if (
+        button_pressed_edge(
+            &btn_next,
+            read_btn_next()
+        )
+    )
+    {
+        selected_item =
+            (selected_item + 1U) % SEL_COUNT;
+
+
+        update_selection_highlight();
+    }
+
+
+    /* --------------------------------------------------------
+     * Encoder rotation
+     * -------------------------------------------------------- */
+
+    count =
+        (uint16_t)__HAL_TIM_GET_COUNTER(
+            &htim3
+        );
+
+
+    diff =
+        (int16_t)(
+            count -
+            enc_last
+        );
+
+
+    enc_last =
+        count;
+
+
+    enc_accum +=
+        diff;
+
+
+    while (
+        enc_accum >=
+        OSCOPE_ENC_COUNTS_PER_STEP
+    )
+    {
+        enc_accum -=
+            OSCOPE_ENC_COUNTS_PER_STEP;
+
+
+        apply_encoder_step(
+            1
+        );
+    }
+
+
+    while (
+        enc_accum <=
+        -OSCOPE_ENC_COUNTS_PER_STEP
+    )
+    {
+        enc_accum +=
+            OSCOPE_ENC_COUNTS_PER_STEP;
+
+
+        apply_encoder_step(
+            -1
+        );
+    }
+}
+
+
+static void oscope_input_start(void)
+{
+    uint32_t ccmr;
+
+
+    /*
+     * Hardware input filter on both encoder channels.
+     */
+    HAL_TIM_Encoder_Stop(
+        &htim3,
+        TIM_CHANNEL_ALL
+    );
+
+
+    ccmr =
+        htim3.Instance->CCMR1;
+
+
+    ccmr &=
+        ~(
+            TIM_CCMR1_IC1F |
+            TIM_CCMR1_IC2F
+        );
+
+
+    ccmr |=
+        (
+            OSCOPE_ENC_FILTER <<
+            TIM_CCMR1_IC1F_Pos
+        )
+        |
+        (
+            OSCOPE_ENC_FILTER <<
+            TIM_CCMR1_IC2F_Pos
+        );
+
+
+    htim3.Instance->CCMR1 =
+        ccmr;
+
+
+    __HAL_TIM_SET_COUNTER(
+        &htim3,
+        0U
+    );
+
+
+    HAL_TIM_Encoder_Start(
+        &htim3,
+        TIM_CHANNEL_ALL
+    );
+
+
+    enc_last =
+        0U;
+
+    enc_accum =
+        0;
+
+
+    /*
+     * A button that is already held is not a new press.
+     */
+    btn_next.pressed =
+        read_btn_next();
+
+    btn_next.last_change_ms =
+        HAL_GetTick();
+
+
+    /*
+     * Default selection: TIME.
+     */
+    selected_item =
+        SEL_TIME;
+
+
+    update_selection_highlight();
+
+
+    if (
+        oscope_input_timer == NULL
+    )
+    {
+        oscope_input_timer =
+            lv_timer_create(
+                oscope_input_timer_cb,
+                OSCOPE_INPUT_PERIOD_MS,
+                NULL
+            );
+    }
+    else
+    {
+        lv_timer_set_period(
+            oscope_input_timer,
+            OSCOPE_INPUT_PERIOD_MS
+        );
+    }
+}
+
+
+static void oscope_input_stop(void)
+{
+    if (
+        oscope_input_timer != NULL
+    )
+    {
+        lv_timer_del(
+            oscope_input_timer
+        );
+
+
+        oscope_input_timer =
+            NULL;
+    }
+
+
+    HAL_TIM_Encoder_Stop(
+        &htim3,
+        TIM_CHANNEL_ALL
+    );
+
+
+    /*
+     * Nothing selected: all colors back to normal.
+     */
+    selected_item =
+        SEL_COUNT;
+
+
+    update_selection_highlight();
+}
+
+
+/* ============================================================
  * ENTER PAGE
  * ============================================================ */
 
@@ -4448,6 +4959,12 @@ void OscopePage_OnEnter(void)
 
 
     update_info_box();
+
+
+    /*
+     * Encoder + buttons (default selection: TIME).
+     */
+    oscope_input_start();
 }
 
 
@@ -4463,6 +4980,12 @@ void OscopePage_OnExit(void)
 
     auto_active =
         false;
+
+
+    /*
+     * Encoder + buttons off.
+     */
+    oscope_input_stop();
 
 
     /*

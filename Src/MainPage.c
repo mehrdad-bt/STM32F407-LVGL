@@ -7,7 +7,6 @@
 
 #include "font_persian_14.h"
 #include "font_persian_16.h"
-#include "MessageBox.h"
 #include "Animation.h"
 
 
@@ -76,6 +75,38 @@ static void MainPage_HideInformationIndicator(void)
 
 void MainPage_Init(void)
 {
+    /* ---------------------------------------------------------------------- */
+    /* OSILLOSCOPE                                                       */
+    /* ---------------------------------------------------------------------- */
+
+    if (objects.calibration_text != NULL)
+    {
+        lv_label_set_text(
+            objects.oscope_button_main_page_text,
+            "اسیلوسکوپ"
+        );
+
+
+        lv_obj_set_style_text_font(
+            objects.oscope_button_main_page_text,
+            &font_persian_16,
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+
+
+        lv_obj_set_style_base_dir(
+            objects.oscope_button_main_page_text,
+            LV_BASE_DIR_RTL,
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+
+
+        lv_obj_set_style_text_color(
+            objects.oscope_button_main_page_text,
+            lv_color_hex(0x000000),
+            LV_PART_MAIN | LV_STATE_DEFAULT
+        );
+    }
     /* ---------------------------------------------------------------------- */
     /* Calibration Text                                                       */
     /* ---------------------------------------------------------------------- */
@@ -186,52 +217,7 @@ void MainPage_Init(void)
     }
 
 
-    /* ---------------------------------------------------------------------- */
-    /* Error Hide/Show                                                        */
-    /* ---------------------------------------------------------------------- */
 
-    if (objects.error_hide_text != NULL)
-    {
-        lv_label_set_text(
-            objects.error_hide_text,
-            "نمایش/مخفی کردن خطا"
-        );
-
-
-        lv_obj_set_style_text_font(
-            objects.error_hide_text,
-            &font_persian_14,
-            LV_PART_MAIN | LV_STATE_DEFAULT
-        );
-
-
-        lv_obj_set_style_base_dir(
-            objects.error_hide_text,
-            LV_BASE_DIR_RTL,
-            LV_PART_MAIN | LV_STATE_DEFAULT
-        );
-
-
-        lv_obj_set_pos(
-            objects.error_hide_text,
-            120,
-            200
-        );
-
-
-        lv_obj_set_style_text_color(
-            objects.error_hide_text,
-            lv_color_hex(0xffffff),
-            LV_PART_MAIN | LV_STATE_DEFAULT
-        );
-    }
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Message Box                                                             */
-    /* ---------------------------------------------------------------------- */
-
-    MessageBox_Init();
 }
 
 

@@ -54,6 +54,10 @@ void Error_Handler(void);
 #define RESET_GPIO_Port GPIOB
 #define TCS_Pin GPIO_PIN_9
 #define TCS_GPIO_Port GPIOE
+#define BTN1_INPUT_Pin GPIO_PIN_10
+#define BTN1_INPUT_GPIO_Port GPIOD
+#define ENCODER_INPUT_Pin GPIO_PIN_11
+#define ENCODER_INPUT_GPIO_Port GPIOD
 
 /* USER CODE BEGIN Private defines */
 

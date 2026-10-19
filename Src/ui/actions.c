@@ -1,7 +1,6 @@
 #include "actions.h"
 
 #include "touchCalibration.h"
-#include "MessageBox.h"
 #include "TempPage.h"
 #include "OscopePage.h"
 
@@ -60,47 +59,7 @@ void action_calibration(
 }
 
 
-/* ============================================================
- * ERROR HIDE
- * ============================================================ */
 
-void action_error_hide(
-    lv_event_t *e
-)
-{
-    lv_obj_t *obj;
-
-    if (e == NULL)
-    {
-        return;
-    }
-
-    obj =
-        lv_event_get_target(e);
-
-    if (obj == NULL)
-    {
-        return;
-    }
-
-    if (
-        lv_obj_has_state(
-            obj,
-            LV_STATE_CHECKED
-        )
-    )
-    {
-        MessageBox_SetHidden(
-            true
-        );
-    }
-    else
-    {
-        MessageBox_SetHidden(
-            false
-        );
-    }
-}
 
 
 /* ============================================================
@@ -381,22 +340,4 @@ void action_auto_button(
 }
 
 
-/* ============================================================
- * MAIN MESSAGE HIDE SWITCH
- * ============================================================ */
 
-void event_handler_cb_main_msg_hide_switch(
-    lv_event_t *e
-)
-{
-    if (
-        e == NULL ||
-        lv_event_get_code(e) !=
-        LV_EVENT_VALUE_CHANGED
-    )
-    {
-        return;
-    }
-
-    action_error_hide(e);
-}

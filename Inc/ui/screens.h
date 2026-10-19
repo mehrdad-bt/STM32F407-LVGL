@@ -27,11 +27,7 @@ typedef struct _objects_t {
     lv_obj_t *oscope_button_main_page_text;
     lv_obj_t *temp_button;
     lv_obj_t *temp_button_text;
-    lv_obj_t *message_box;
-    lv_obj_t *message_box_text;
     lv_obj_t *information_indicator;
-    lv_obj_t *msg_hide_switch;
-    lv_obj_t *error_hide_text;
     lv_obj_t *temp_exit_button;
     lv_obj_t *temp_exit_button_text;
     lv_obj_t *temp_text_static;
@@ -42,17 +38,14 @@ typedef struct _objects_t {
     lv_obj_t *chart_oscope;
     lv_obj_t *oscope_page_exit_button;
     lv_obj_t *oscope_page_exit_button_text;
-    lv_obj_t *time_plus_btn;
-    lv_obj_t *time_minus_btn;
-    lv_obj_t *volt_plus_btn;
-    lv_obj_t *volt_minus_btn;
-    lv_obj_t *trig_plus_btn;
-    lv_obj_t *trig_minus_btn;
     lv_obj_t *stop_run_btn;
     lv_obj_t *obj0;
-    lv_obj_t *obj1;
     lv_obj_t *auto_button;
     lv_obj_t *auto_button_text;
+    lv_obj_t *time_text;
+    lv_obj_t *voltage_text;
+    lv_obj_t *sweep_text;
+    lv_obj_t *trig_button;
 } objects_t;
 
 extern objects_t objects;
