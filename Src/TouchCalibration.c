@@ -11,7 +11,11 @@
  * ========================================================= */
 
 /*
- * Exactly like TFT_eSPI calibration:
+ * Same method as TFT_eSPI calibrateTouch():
+ *
+ * The user touches the four real CORNERS of the screen
+ * (the "15" in the TFT_eSPI sketch is only the size of the
+ * arrow that is drawn, the touch point is the corner itself):
  *
  * 1 -> Top Left
  * 2 -> Top Right
@@ -24,11 +28,12 @@
 #define CAL_POINT_COUNT             4U
 
 /*
- * Distance of calibration points from the screen edges.
- * Equivalent to the "15" used in the original TFT_eSPI code.
+ * Arrow drawn at the corner (same as TFT_eSPI calibrateTouch,
+ * "size" = 15 pixels).
  */
-#define CAL_POINT_OFFSET_X          15U
-#define CAL_POINT_OFFSET_Y          15U
+#define CAL_ARROW_SIZE              15
+#define CAL_ARROW_LINE_WIDTH        1
+#define CAL_ARROW_COLOR             0xFF00FFU   /* TFT_MAGENTA */
 
 /*
  * Number of raw samples used to calculate one point.
@@ -80,26 +85,26 @@ static const CalibrationPoint_t calibration_points[
 {
     /* 1 - Top Left */
     {
-        CAL_POINT_OFFSET_X,
-        CAL_POINT_OFFSET_Y
+        0U,
+        0U
     },
 
     /* 2 - Top Right */
     {
-        TOUCH_SCREEN_WIDTH - 1U - CAL_POINT_OFFSET_X,
-        CAL_POINT_OFFSET_Y
+        TOUCH_SCREEN_WIDTH - 1U,
+        0U
     },
 
     /* 3 - Bottom Right */
     {
-        TOUCH_SCREEN_WIDTH - 1U - CAL_POINT_OFFSET_X,
-        TOUCH_SCREEN_HEIGHT - 1U - CAL_POINT_OFFSET_Y
+        TOUCH_SCREEN_WIDTH - 1U,
+        TOUCH_SCREEN_HEIGHT - 1U
     },
 
     /* 4 - Bottom Left */
     {
-        CAL_POINT_OFFSET_X,
-        TOUCH_SCREEN_HEIGHT - 1U - CAL_POINT_OFFSET_Y
+        0U,
+        TOUCH_SCREEN_HEIGHT - 1U
     }
 };
 
@@ -146,7 +151,15 @@ static lv_obj_t *calibration_title = NULL;
 
 static lv_obj_t *calibration_status = NULL;
 
+/*
+ * calibration_target is a transparent container (full screen)
+ * that holds the three lines of the corner arrow.
+ */
 static lv_obj_t *calibration_target = NULL;
+
+static lv_obj_t *calibration_arrow[3] = { NULL, NULL, NULL };
+
+static lv_point_t arrow_points[3][2];
 
 /*
  * Screen active before calibration started.
@@ -184,86 +197,14 @@ static void FinishPointCapture(void);
 static bool ApplyCalibration(void);
 
 /* =========================================================
- * Average two values
+ * Absolute value
  * ========================================================= */
 
-static uint16_t Average2(
-    uint16_t a,
-    uint16_t b
-)
-{
-    return (uint16_t)(
-        ((uint32_t)a + (uint32_t)b) / 2U
-    );
-}
-
-/* =========================================================
- * Clamp 12-bit XPT2046 value
- * ========================================================= */
-
-static uint16_t ClampRaw(
+static int32_t Abs32(
     int32_t value
 )
 {
-    if (value < 0)
-    {
-        return 0U;
-    }
-
-    if (value > 4095)
-    {
-        return 4095U;
-    }
-
-    return (uint16_t)value;
-}
-
-/* =========================================================
- * Extrapolate raw coordinate to screen edge
- *
- * Calibration points are 15 pixels from the edges.
- * We therefore calculate the raw value corresponding
- * to screen coordinate 0 and screen maximum.
- * ========================================================= */
-
-static uint16_t ExtrapolateRaw(
-    uint16_t raw1,
-    uint16_t screen1,
-    uint16_t raw2,
-    uint16_t screen2,
-    uint16_t target_screen
-)
-{
-    int32_t r1 = (int32_t)raw1;
-    int32_t r2 = (int32_t)raw2;
-
-    int32_t s1 = (int32_t)screen1;
-    int32_t s2 = (int32_t)screen2;
-
-    int32_t st = (int32_t)target_screen;
-
-    int32_t screen_delta =
-        s2 - s1;
-
-    if (screen_delta == 0)
-    {
-        return raw1;
-    }
-
-    int32_t raw_delta =
-        r2 - r1;
-
-    int32_t target_delta =
-        st - s1;
-
-    int32_t result =
-        r1 +
-        (
-            (raw_delta * target_delta) /
-            screen_delta
-        );
-
-    return ClampRaw(result);
+    return (value < 0) ? -value : value;
 }
 
 /* =========================================================
@@ -289,14 +230,46 @@ static void UpdateCalibrationTarget(void)
         calibration_points[current_point].y;
 
     /*
-     * Target object is 26x26.
-     * Put its center exactly on the calibration point.
+     * Arrow pointing at the corner, like TFT_eSPI:
+     *
+     *   - one line along the vertical edge
+     *   - one line along the horizontal edge
+     *   - one diagonal line
+     *
+     * all starting at the corner and CAL_ARROW_SIZE long.
      */
-    lv_obj_set_pos(
-        calibration_target,
-        (lv_coord_t)(x - 13U),
-        (lv_coord_t)(y - 13U)
-    );
+    int32_t sx = (x == 0U) ? 1 : -1;
+    int32_t sy = (y == 0U) ? 1 : -1;
+
+    int32_t cx = (int32_t)x;
+    int32_t cy = (int32_t)y;
+
+    arrow_points[0][0].x = (lv_coord_t)cx;
+    arrow_points[0][0].y = (lv_coord_t)cy;
+    arrow_points[0][1].x = (lv_coord_t)cx;
+    arrow_points[0][1].y = (lv_coord_t)(cy + sy * CAL_ARROW_SIZE);
+
+    arrow_points[1][0].x = (lv_coord_t)cx;
+    arrow_points[1][0].y = (lv_coord_t)cy;
+    arrow_points[1][1].x = (lv_coord_t)(cx + sx * CAL_ARROW_SIZE);
+    arrow_points[1][1].y = (lv_coord_t)cy;
+
+    arrow_points[2][0].x = (lv_coord_t)cx;
+    arrow_points[2][0].y = (lv_coord_t)cy;
+    arrow_points[2][1].x = (lv_coord_t)(cx + sx * CAL_ARROW_SIZE);
+    arrow_points[2][1].y = (lv_coord_t)(cy + sy * CAL_ARROW_SIZE);
+
+    for (uint8_t k = 0U; k < 3U; k++)
+    {
+        if (calibration_arrow[k] != NULL)
+        {
+            lv_line_set_points(
+                calibration_arrow[k],
+                arrow_points[k],
+                2U
+            );
+        }
+    }
 
     if (calibration_status != NULL)
     {
@@ -417,7 +390,7 @@ static void CreateCalibrationScreen(void)
     );
 
     /* =====================================================
-     * Calibration target
+     * Calibration target: corner arrow (3 lines)
      * ===================================================== */
 
     calibration_target =
@@ -427,43 +400,25 @@ static void CreateCalibrationScreen(void)
 
     lv_obj_set_size(
         calibration_target,
-        26,
-        26
+        TOUCH_SCREEN_WIDTH,
+        TOUCH_SCREEN_HEIGHT
     );
 
-    /*
-     * Transparent inside.
-     */
+    lv_obj_set_pos(
+        calibration_target,
+        0,
+        0
+    );
+
     lv_obj_set_style_bg_opa(
         calibration_target,
         LV_OPA_TRANSP,
         LV_PART_MAIN
     );
 
-    /*
-     * Magenta border.
-     */
     lv_obj_set_style_border_width(
         calibration_target,
-        3,
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_border_color(
-        calibration_target,
-        lv_color_hex(0xFF00FF),
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_border_opa(
-        calibration_target,
-        LV_OPA_COVER,
-        LV_PART_MAIN
-    );
-
-    lv_obj_set_style_radius(
-        calibration_target,
-        LV_RADIUS_CIRCLE,
+        0,
         LV_PART_MAIN
     );
 
@@ -472,6 +427,36 @@ static void CreateCalibrationScreen(void)
         0,
         LV_PART_MAIN
     );
+
+    lv_obj_clear_flag(
+        calibration_target,
+        LV_OBJ_FLAG_SCROLLABLE
+    );
+
+    lv_obj_clear_flag(
+        calibration_target,
+        LV_OBJ_FLAG_CLICKABLE
+    );
+
+    for (uint8_t k = 0U; k < 3U; k++)
+    {
+        calibration_arrow[k] =
+            lv_line_create(
+                calibration_target
+            );
+
+        lv_obj_set_style_line_color(
+            calibration_arrow[k],
+            lv_color_hex(CAL_ARROW_COLOR),
+            LV_PART_MAIN
+        );
+
+        lv_obj_set_style_line_width(
+            calibration_arrow[k],
+            CAL_ARROW_LINE_WIDTH,
+            LV_PART_MAIN
+        );
+    }
 
     /*
      * Initially hidden.
@@ -509,195 +494,97 @@ static void StartPointCapture(void)
 }
 
 /* =========================================================
- * Apply calibration
+ * Apply calibration  (TFT_eSPI calibrateTouch() algorithm)
  *
- * Four manually selected corner points are enough to
- * determine:
+ * raw_points:
+ *     0 = Top Left
+ *     1 = Top Right
+ *     2 = Bottom Right
+ *     3 = Bottom Left
  *
- *     X minimum
- *     X maximum
- *     Y minimum
- *     Y maximum
- *     Axis swap
- *     X inversion
- *     Y inversion
- *
+ * 1. From Top Left to Bottom Left the screen Y changes.
+ *    If the raw X changes more than the raw Y, the touch and
+ *    screen axes are swapped.
+ * 2. Raw min/max of the axis that feeds the screen X and the
+ *    axis that feeds the screen Y are the averages of the two
+ *    corners on each side.
+ * 3. If min > max, the axis is inverted: min and max are
+ *    exchanged and the invert flag is set.
  * ========================================================= */
 
 static bool ApplyCalibration(void)
 {
-    /*
-     * Raw points:
-     *
-     * 0 = Top Left
-     * 1 = Top Right
-     * 2 = Bottom Right
-     * 3 = Bottom Left
-     */
+    int32_t ul_x = (int32_t)raw_points[0].x;
+    int32_t ul_y = (int32_t)raw_points[0].y;
 
-    /*
-     * Determine whether raw X follows horizontal or
-     * vertical movement.
-     */
+    int32_t ur_x = (int32_t)raw_points[1].x;
+    int32_t ur_y = (int32_t)raw_points[1].y;
 
-    uint32_t raw_x_horizontal =
-        (uint32_t)(
-            (raw_points[1].x >= raw_points[0].x)
-                ?
-                (raw_points[1].x - raw_points[0].x)
-                :
-                (raw_points[0].x - raw_points[1].x)
-        )
-        +
-        (uint32_t)(
-            (raw_points[2].x >= raw_points[3].x)
-                ?
-                (raw_points[2].x - raw_points[3].x)
-                :
-                (raw_points[3].x - raw_points[2].x)
+    int32_t br_x = (int32_t)raw_points[2].x;
+    int32_t br_y = (int32_t)raw_points[2].y;
+
+    int32_t bl_x = (int32_t)raw_points[3].x;
+    int32_t bl_y = (int32_t)raw_points[3].y;
+
+    int32_t x0;
+    int32_t x1;
+    int32_t y0;
+    int32_t y1;
+
+    bool swap_xy;
+    bool invert_x;
+    bool invert_y;
+
+    swap_xy =
+        (
+            Abs32(ul_x - bl_x) >
+            Abs32(ul_y - bl_y)
         );
 
-    uint32_t raw_x_vertical =
-        (uint32_t)(
-            (raw_points[3].x >= raw_points[0].x)
-                ?
-                (raw_points[3].x - raw_points[0].x)
-                :
-                (raw_points[0].x - raw_points[3].x)
-        )
-        +
-        (uint32_t)(
-            (raw_points[2].x >= raw_points[1].x)
-                ?
-                (raw_points[2].x - raw_points[1].x)
-                :
-                (raw_points[1].x - raw_points[2].x)
-        );
-
-    bool swap_xy =
-        (raw_x_vertical > raw_x_horizontal);
-
-    uint16_t raw_left;
-    uint16_t raw_right;
-    uint16_t raw_top;
-    uint16_t raw_bottom;
-
-    /* =====================================================
-     * Normal orientation
-     *
-     * raw X -> screen X
-     * raw Y -> screen Y
-     * ===================================================== */
-
-    if (!swap_xy)
+    if (swap_xy)
     {
-        raw_left =
-            Average2(
-                raw_points[0].x,
-                raw_points[3].x
-            );
-
-        raw_right =
-            Average2(
-                raw_points[1].x,
-                raw_points[2].x
-            );
-
-        raw_top =
-            Average2(
-                raw_points[0].y,
-                raw_points[1].y
-            );
-
-        raw_bottom =
-            Average2(
-                raw_points[3].y,
-                raw_points[2].y
-            );
-    }
-
-    /* =====================================================
-     * Swapped orientation
-     *
-     * raw Y -> screen X
-     * raw X -> screen Y
-     * ===================================================== */
-
-    else
-    {
-        raw_left =
-            Average2(
-                raw_points[0].y,
-                raw_points[3].y
-            );
-
-        raw_right =
-            Average2(
-                raw_points[1].y,
-                raw_points[2].y
-            );
-
-        raw_top =
-            Average2(
-                raw_points[0].x,
-                raw_points[1].x
-            );
-
-        raw_bottom =
-            Average2(
-                raw_points[3].x,
-                raw_points[2].x
-            );
-    }
-
-    /* =====================================================
-     * Validate X range
-     * ===================================================== */
-
-    uint16_t x_range;
-
-    if (raw_right >= raw_left)
-    {
-        x_range =
-            (uint16_t)(
-                raw_right - raw_left
-            );
+        x0 = (ul_y + bl_y) / 2;   /* min X */
+        x1 = (ur_y + br_y) / 2;   /* max X */
+        y0 = (ul_x + ur_x) / 2;   /* min Y */
+        y1 = (bl_x + br_x) / 2;   /* max Y */
     }
     else
     {
-        x_range =
-            (uint16_t)(
-                raw_left - raw_right
-            );
+        x0 = (ul_x + bl_x) / 2;   /* min X */
+        x1 = (ur_x + br_x) / 2;   /* max X */
+        y0 = (ul_y + ur_y) / 2;   /* min Y */
+        y1 = (bl_y + br_y) / 2;   /* max Y */
     }
 
-    /* =====================================================
-     * Validate Y range
-     * ===================================================== */
+    invert_x = false;
+    invert_y = false;
 
-    uint16_t y_range;
-
-    if (raw_bottom >= raw_top)
+    if (x0 > x1)
     {
-        y_range =
-            (uint16_t)(
-                raw_bottom - raw_top
-            );
+        int32_t tmp = x0;
+
+        x0 = x1;
+        x1 = tmp;
+
+        invert_x = true;
     }
-    else
+
+    if (y0 > y1)
     {
-        y_range =
-            (uint16_t)(
-                raw_top - raw_bottom
-            );
+        int32_t tmp = y0;
+
+        y0 = y1;
+        y1 = tmp;
+
+        invert_y = true;
     }
 
     /*
-     * Invalid calibration.
+     * Invalid calibration (corners not touched correctly).
      */
     if (
-        (x_range < CAL_MIN_RAW_RANGE) ||
-        (y_range < CAL_MIN_RAW_RANGE)
+        ((x1 - x0) < (int32_t)CAL_MIN_RAW_RANGE) ||
+        ((y1 - y0) < (int32_t)CAL_MIN_RAW_RANGE)
     )
     {
         if (calibration_status != NULL)
@@ -711,130 +598,29 @@ static bool ApplyCalibration(void)
         return false;
     }
 
-    /* =====================================================
-     * Determine inversion
-     * ===================================================== */
-
-    bool invert_x =
-        (raw_left > raw_right);
-
-    bool invert_y =
-        (raw_top > raw_bottom);
-
-    /* =====================================================
-     * Extrapolate raw values to actual screen edges
-     *
-     * We touched:
-     *
-     * X = 15 .. 304
-     * Y = 15 .. 224
-     *
-     * The actual screen is:
-     *
-     * X = 0 .. 319
-     * Y = 0 .. 239
-     * ===================================================== */
-
-    uint16_t x_edge_0 =
-        ExtrapolateRaw(
-            raw_left,
-            calibration_points[0].x,
-            raw_right,
-            calibration_points[1].x,
-            0U
-        );
-
-    uint16_t x_edge_max =
-        ExtrapolateRaw(
-            raw_left,
-            calibration_points[0].x,
-            raw_right,
-            calibration_points[1].x,
-            TOUCH_SCREEN_WIDTH - 1U
-        );
-
-    uint16_t y_edge_0 =
-        ExtrapolateRaw(
-            raw_top,
-            calibration_points[0].y,
-            raw_bottom,
-            calibration_points[3].y,
-            0U
-        );
-
-    uint16_t y_edge_max =
-        ExtrapolateRaw(
-            raw_top,
-            calibration_points[0].y,
-            raw_bottom,
-            calibration_points[3].y,
-            TOUCH_SCREEN_HEIGHT - 1U
-        );
-
-    uint16_t x_min;
-    uint16_t x_max;
-
-    uint16_t y_min;
-    uint16_t y_max;
-
-    if (x_edge_0 < x_edge_max)
-    {
-        x_min = x_edge_0;
-        x_max = x_edge_max;
-    }
-    else
-    {
-        x_min = x_edge_max;
-        x_max = x_edge_0;
-    }
-
-    if (y_edge_0 < y_edge_max)
-    {
-        y_min = y_edge_0;
-        y_max = y_edge_max;
-    }
-    else
-    {
-        y_min = y_edge_max;
-        y_max = y_edge_0;
-    }
+    if (x0 < 0)    { x0 = 0;    }
+    if (y0 < 0)    { y0 = 0;    }
+    if (x1 > 4095) { x1 = 4095; }
+    if (y1 > 4095) { y1 = 4095; }
 
     /*
-     * Final validation.
+     * Apply to the XPT2046 driver.
      */
-    if (
-        ((uint16_t)(x_max - x_min) < CAL_MIN_RAW_RANGE) ||
-        ((uint16_t)(y_max - y_min) < CAL_MIN_RAW_RANGE)
-    )
-    {
-        if (calibration_status != NULL)
-        {
-            lv_label_set_text(
-                calibration_status,
-                "Calibration failed!"
-            );
-        }
-
-        return false;
-    }
-
-    /* =====================================================
-     * Apply calibration to XPT2046 driver
-     * ===================================================== */
-
+    /*
+     * The XPT2046 driver uses TFT_eSPI semantics:
+     * the 2nd and 4th parameter are the RANGE (max - min),
+     * not the maximum value.
+     */
     XPT2046_SetCalibration(
-        x_min,
-        x_max,
-        y_min,
-        y_max,
+        (uint16_t)x0,
+        (uint16_t)(x1 - x0),
+        (uint16_t)y0,
+        (uint16_t)(y1 - y0),
         swap_xy,
         invert_x,
         invert_y
     );
 
-    /*
-     * Show calculated values.
-     */
     if (calibration_status != NULL)
     {
         lv_label_set_text_fmt(
@@ -842,10 +628,10 @@ static bool ApplyCalibration(void)
             "Calibration complete!\n"
             "X: %u - %u\n"
             "Y: %u - %u",
-            (unsigned)x_min,
-            (unsigned)x_max,
-            (unsigned)y_min,
-            (unsigned)y_max
+            (unsigned)x0,
+            (unsigned)x1,
+            (unsigned)y0,
+            (unsigned)y1
         );
     }
 
@@ -1176,6 +962,10 @@ static void CalibrationExitCallback(
     calibration_title = NULL;
     calibration_status = NULL;
     calibration_target = NULL;
+
+    calibration_arrow[0] = NULL;
+    calibration_arrow[1] = NULL;
+    calibration_arrow[2] = NULL;
 
     return_screen = NULL;
 

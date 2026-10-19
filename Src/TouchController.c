@@ -28,12 +28,17 @@
  * invert Y = 1
  * ========================================================= */
 
+/*
+ * Measured raw values:
+ *   X : 555 .. 3867  -> min 555, range 3867 - 555 = 3312
+ *   Y : 740 .. 3265  -> min 740, range 3265 - 740 = 2525
+ */
 static uint16_t calData[5] =
 {
-    351,
-    3465,
-    306,
-    3446,
+    555,
+    3312,
+    740,
+    2525,
     7
 };
 
@@ -57,11 +62,11 @@ static uint16_t touch_cs_pin = 0U;
  * y0 = minimum
  * y1 = range
  */
-static uint16_t touch_x0 = 351U;
-static uint16_t touch_x_range = 3465U;
+static uint16_t touch_x0 = 555U;
+static uint16_t touch_x_range = 3312U;
 
-static uint16_t touch_y0 = 306U;
-static uint16_t touch_y_range = 3446U;
+static uint16_t touch_y0 = 740U;
+static uint16_t touch_y_range = 2525U;
 
 static bool touch_rotate = true;
 static bool touch_invert_x = true;
@@ -250,19 +255,8 @@ static bool XPT2046_Transfer12(
     return true;
 }
 
-/* =========================================================
- * Average two values
- * ========================================================= */
 
-static uint16_t Average2(
-    uint16_t a,
-    uint16_t b
-)
-{
-    return (uint16_t)(
-        ((uint32_t)a + (uint32_t)b) / 2U
-    );
-}
+
 
 /* =========================================================
  * Sort five samples
