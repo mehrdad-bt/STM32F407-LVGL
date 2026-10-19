@@ -1,1 +1,1 @@
-added Auto button in osilloscope
+added physical buttons
